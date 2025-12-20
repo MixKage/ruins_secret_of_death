@@ -1,0 +1,65 @@
+[
+  {
+    "id": "vitality",
+    "name": "Кровь руин (+5 макс. здоровья)",
+    "type": "stat",
+    "stat": "hp_max",
+    "amount": 5
+  },
+  {
+    "id": "stamina",
+    "name": "Железная воля (+1 ОД макс.)",
+    "type": "stat",
+    "stat": "ap_max",
+    "amount": 1
+  },
+  {
+    "id": "focus",
+    "name": "Око тьмы (+7% точности)",
+    "type": "stat",
+    "stat": "accuracy",
+    "amount": 0.07
+  },
+  {
+    "id": "agility",
+    "name": "Шаг в тени (+6% уклонения)",
+    "type": "stat",
+    "stat": "evasion",
+    "amount": 0.06
+  },
+  {
+    "id": "plating",
+    "name": "Ритуальные пластины (+1 броня)",
+    "type": "stat",
+    "stat": "armor",
+    "amount": 1
+  },
+  {
+    "id": "power",
+    "name": "Сила руин (+1 к урону)",
+    "type": "stat",
+    "stat": "power",
+    "amount": 1
+  },
+  {
+    "id": "lucky_amulet",
+    "name": "Амулет удачи (+10% удачи)",
+    "type": "stat",
+    "stat": "luck",
+    "amount": 0.1
+  },
+  {
+    "id": "potion_small",
+    "name": "Слабое зелье (лечит 8 HP и +1 ОД)",
+    "type": "potion",
+    "heal": 8,
+    "ap_restore": 1
+  },
+  {
+    "id": "potion_strong",
+    "name": "Сильное зелье (лечит 14 HP и +2 ОД)",
+    "type": "potion",
+    "heal": 14,
+    "ap_restore": 2
+  }
+]
