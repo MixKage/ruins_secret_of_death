@@ -5,6 +5,7 @@ from bot import db
 from bot.game.logic import (
     apply_reward,
     apply_event_choice,
+    build_enemy_info_text,
     end_turn,
     new_run_state,
     player_attack,
@@ -20,7 +21,8 @@ def _battle_markup(state: dict):
     player = state["player"]
     has_potion = bool(player.get("potions"))
     can_attack = player["ap"] > 0
-    return battle_kb(has_potion=has_potion, can_attack=can_attack)
+    show_info = bool(state.get("show_info"))
+    return battle_kb(has_potion=has_potion, can_attack=can_attack, show_info=show_info)
 
 
 async def _send_state(callback: CallbackQuery, state: dict) -> None:
@@ -104,6 +106,12 @@ async def battle_action(callback: CallbackQuery) -> None:
         player_attack(state)
     elif action == "potion":
         player_use_potion(state)
+    elif action == "info":
+        state["show_info"] = not state.get("show_info", False)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state)
+        return
     elif action == "endturn":
         end_turn(state)
     elif action == "forfeit":

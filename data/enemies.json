@@ -13,7 +13,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 1,
-    "max_floor": 3
+    "max_floor": 3,
+    "danger": "низкая",
+    "info": "Медленный и упрямый. Лучше добивать без промахов."
   },
   {
     "id": "skeleton",
@@ -29,7 +31,9 @@
     "group_min": 1,
     "group_max": 3,
     "min_floor": 1,
-    "max_floor": 3
+    "max_floor": 3,
+    "danger": "средняя",
+    "info": "Хрупок, но точен. Уколы и бронепробой заходят лучше."
   },
   {
     "id": "cultist",
@@ -45,7 +49,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 1,
-    "max_floor": 3
+    "max_floor": 3,
+    "danger": "средняя",
+    "info": "Быстрый и опасный вблизи. Ошибки наказывает сразу."
   },
   {
     "id": "rotting_hound",
@@ -61,7 +67,9 @@
     "group_min": 2,
     "group_max": 3,
     "min_floor": 1,
-    "max_floor": 3
+    "max_floor": 3,
+    "danger": "средняя",
+    "info": "Быстр, как кость в шторме. Бить тяжело — высок шанс промахнуться."
   },
   {
     "id": "ghoul",
@@ -77,7 +85,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 1,
-    "max_floor": 3
+    "max_floor": 3,
+    "danger": "средняя",
+    "info": "Живучий тварь. Не давай затянуть бой."
   },
   {
     "id": "wraith",
@@ -93,7 +103,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 4,
-    "max_floor": 6
+    "max_floor": 6,
+    "danger": "высокая",
+    "info": "Тень скользит между ударами. Нужна точность."
   },
   {
     "id": "bone_knight",
@@ -109,7 +121,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 4,
-    "max_floor": 6
+    "max_floor": 6,
+    "danger": "высокая",
+    "info": "Тяжелая броня и крепкая стойка. Бронепробой решает."
   },
   {
     "id": "plague_mage",
@@ -125,7 +139,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 4,
-    "max_floor": 6
+    "max_floor": 6,
+    "danger": "высокая",
+    "info": "Бьет метко и больно. Сломай темп быстрее."
   },
   {
     "id": "abyssal_guard",
@@ -141,7 +157,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 7,
-    "max_floor": 9
+    "max_floor": 9,
+    "danger": "смертельная",
+    "info": "Страж бездны не прощает. Ломай броню и бей быстро."
   },
   {
     "id": "lich_acolyte",
@@ -157,7 +175,9 @@
     "group_min": 1,
     "group_max": 2,
     "min_floor": 7,
-    "max_floor": 9
+    "max_floor": 9,
+    "danger": "высокая",
+    "info": "Проклятия жгут сквозь защиту. Не затягивай."
   },
   {
     "id": "stone_golem",
@@ -173,6 +193,8 @@
     "group_min": 1,
     "group_max": 1,
     "min_floor": 7,
-    "max_floor": 9
+    "max_floor": 9,
+    "danger": "смертельная",
+    "info": "Каменная стена. Почти не уклоняется, но броня огромна."
   }
 ]

@@ -15,13 +15,15 @@ def main_menu_kb(has_active_run: bool = False) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def battle_kb(has_potion: bool, can_attack: bool) -> InlineKeyboardMarkup:
+def battle_kb(has_potion: bool, can_attack: bool, show_info: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if can_attack:
         builder.button(text="Атаковать", callback_data="action:attack")
+    builder.button(text="Завершить ход", callback_data="action:endturn")
     if has_potion:
         builder.button(text="Зелье", callback_data="action:potion")
-    builder.button(text="Завершить ход", callback_data="action:endturn")
+    info_text = "Скрыть справку" if show_info else "Справка"
+    builder.button(text=info_text, callback_data="action:info")
     builder.button(text="Сдаться", callback_data="action:forfeit")
     builder.adjust(2)
     return builder.as_markup()

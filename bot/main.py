@@ -4,6 +4,7 @@ import os
 import sys
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 
 if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     try:
         await init_db()
-        bot = Bot(token=get_bot_token())
+        bot = Bot(token=get_bot_token(), default=DefaultBotProperties(parse_mode="HTML"))
         dispatcher = Dispatcher()
         dispatcher.include_router(start_router)
         dispatcher.include_router(game_router)

@@ -1,6 +1,7 @@
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from html import escape
 
 from bot import db
 from bot.keyboards import main_menu_kb
@@ -10,11 +11,11 @@ router = Router()
 
 def _format_leaderboard(rows):
     if not rows:
-        return "Рейтинг пуст."
-    lines = ["Рейтинг (топ-10):"]
+        return "<i>Рейтинг пуст.</i>"
+    lines = ["<b>Рейтинг (топ-10):</b>"]
     for idx, (username, max_floor) in enumerate(rows, start=1):
-        name = username or "Без имени"
-        lines.append(f"{idx}. {name} — этаж {max_floor}")
+        name = escape(username) if username else "Без имени"
+        lines.append(f"{idx}. {name} — этаж <b>{max_floor}</b>")
     return "\n".join(lines)
 
 
