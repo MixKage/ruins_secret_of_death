@@ -29,6 +29,18 @@ async def init_db() -> None:
                 state_json TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS user_stats (
+                user_id INTEGER PRIMARY KEY,
+                total_runs INTEGER DEFAULT 0,
+                deaths INTEGER DEFAULT 0,
+                deaths_by_floor TEXT DEFAULT "{}",
+                kills_json TEXT DEFAULT "{}",
+                treasures_found INTEGER DEFAULT 0,
+                chests_opened INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
             """
         )
         await db.commit()
@@ -128,3 +140,95 @@ async def get_leaderboard(limit: int = 10) -> List[Tuple]:
             (limit,),
         )
         return await cursor.fetchall()
+
+
+async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, max_floor, state_json FROM runs "
+            "WHERE user_id = ? ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        run_id, max_floor, state_json = row
+        state = json.loads(state_json) if state_json else {}
+        return run_id, max_floor, state
+
+
+async def get_leaderboard_with_ids(limit: int = 10) -> List[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, username, max_floor FROM users "
+            "ORDER BY max_floor DESC, username ASC LIMIT ?",
+            (limit,),
+        )
+        return await cursor.fetchall()
+
+
+async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
+            "FROM user_stats WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened = row
+        return {
+            "total_runs": total_runs or 0,
+            "deaths": deaths or 0,
+            "deaths_by_floor": json.loads(deaths_by_floor or "{}"),
+            "kills": json.loads(kills_json or "{}"),
+            "treasures_found": treasures_found or 0,
+            "chests_opened": chests_opened or 0,
+        }
+
+
+async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO user_stats (user_id) VALUES (?)",
+            (user_id,),
+        )
+        cursor = await db.execute(
+            "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
+            "FROM user_stats WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened = row or (0, 0, "{}", "{}", 0, 0)
+
+        total_runs = (total_runs or 0) + 1
+        deaths = deaths or 0
+        deaths_by_floor = json.loads(deaths_by_floor or "{}")
+        kills = json.loads(kills_json or "{}")
+        treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
+        chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
+
+        if died:
+            deaths += 1
+            floor = str(state.get("floor", 0))
+            deaths_by_floor[floor] = deaths_by_floor.get(floor, 0) + 1
+
+        for enemy_id, count in (state.get("kills", {}) or {}).items():
+            kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
+
+        await db.execute(
+            "UPDATE user_stats SET total_runs = ?, deaths = ?, deaths_by_floor = ?, "
+            "kills_json = ?, treasures_found = ?, chests_opened = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE user_id = ?",
+            (
+                total_runs,
+                deaths,
+                json.dumps(deaths_by_floor),
+                json.dumps(kills),
+                treasures_found,
+                chests_opened,
+                user_id,
+            ),
+        )
+        await db.commit()

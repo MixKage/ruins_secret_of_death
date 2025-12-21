@@ -72,8 +72,10 @@ async def start_new_run(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_id)
     if active:
         run_id, state = active
+        await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_id, state.get("floor", 0))
+        await db.record_run_stats(user_id, state, died=False)
 
     state = new_run_state()
     await db.create_run(user_id, state)
@@ -115,8 +117,10 @@ async def battle_action(callback: CallbackQuery) -> None:
     elif action == "endturn":
         end_turn(state)
     elif action == "forfeit":
+        await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
+        await db.record_run_stats(user_row[0], state, died=False)
         await callback.answer("Забег завершен.")
         if callback.message:
             await callback.message.edit_text(
@@ -126,8 +130,10 @@ async def battle_action(callback: CallbackQuery) -> None:
         return
 
     if state["phase"] == "dead":
+        await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
+        await db.record_run_stats(user_row[0], state, died=True)
     else:
         await db.update_run(run_id, state)
 
@@ -187,8 +193,10 @@ async def event_choice(callback: CallbackQuery) -> None:
     apply_event_choice(state, event_id)
 
     if state["phase"] == "dead":
+        await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
+        await db.record_run_stats(user_row[0], state, died=True)
     else:
         await db.update_run(run_id, state)
 

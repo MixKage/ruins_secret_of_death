@@ -128,6 +128,9 @@ def new_run_state() -> Dict:
         "rewards": [],
         "event_options": [],
         "show_info": False,
+        "kills": {},
+        "treasures_found": 0,
+        "chests_opened": 0,
         "log": [],
     }
     _append_log(state, f"Вы нашли <b>{weapon['name']}</b> и спускаетесь на этаж <b>1</b>.")
@@ -175,6 +178,7 @@ def build_enemy(template: Dict, floor: int) -> Dict:
         "evasion": evasion,
         "bleed_turns": 0,
         "bleed_damage": 0,
+        "counted_dead": False,
         "info": template.get("info", ""),
         "danger": template.get("danger", "неизвестна"),
         "min_floor": template.get("min_floor", 1),
@@ -203,6 +207,15 @@ def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
 
 def _alive_enemies(enemies: List[Dict]) -> List[Dict]:
     return [enemy for enemy in enemies if enemy["hp"] > 0]
+
+
+def _tally_kills(state: Dict) -> None:
+    kills = state.setdefault("kills", {})
+    for enemy in state.get("enemies", []):
+        if enemy["hp"] <= 0 and not enemy.get("counted_dead", False):
+            enemy["counted_dead"] = True
+            enemy_id = enemy.get("id", "unknown")
+            kills[enemy_id] = kills.get(enemy_id, 0) + 1
 
 
 def _first_alive(enemies: List[Dict]) -> Dict:
@@ -277,6 +290,7 @@ def end_turn(state: Dict) -> None:
     player = state["player"]
     player["ap"] = player["ap_max"]
     enemy_phase(state)
+    _tally_kills(state)
     check_battle_end(state)
 
 
@@ -341,6 +355,7 @@ def enemy_phase(state: Dict) -> None:
             enemy["bleed_turns"] -= 1
             _append_log(state, f"{enemy['name']} теряет {enemy['bleed_damage']} HP от кровотечения.")
 
+    _tally_kills(state)
     enemies = _alive_enemies(state["enemies"])
     if not enemies:
         return
@@ -362,6 +377,7 @@ def enemy_phase(state: Dict) -> None:
 def check_battle_end(state: Dict) -> None:
     if state["phase"] == "dead":
         return
+    _tally_kills(state)
     if not _alive_enemies(state["enemies"]):
         state["phase"] = "reward"
         state["rewards"] = generate_rewards(state["floor"])
@@ -447,11 +463,13 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         player["hp"] = player["hp_max"]
         _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
     elif event_id == "treasure_chest":
+        state["chests_opened"] = state.get("chests_opened", 0) + 1
         chance = _clamp(0.2 + player["luck"], 0.05, 0.8)
         if random.random() < chance:
             reward = generate_single_reward(state["floor"] + 2)
             _append_log(state, "Сундук раскрывает <b>редкую</b> находку.")
             apply_reward_item(state, reward)
+            state["treasures_found"] = state.get("treasures_found", 0) + 1
         else:
             _append_log(state, "<i>Сундук пуст. Удача отвернулась.</i>")
         _grant_small_potion(player)

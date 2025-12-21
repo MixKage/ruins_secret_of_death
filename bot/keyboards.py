@@ -11,6 +11,9 @@ def main_menu_kb(has_active_run: bool = False) -> InlineKeyboardMarkup:
         builder.button(text="Начать забег", callback_data="menu:new")
     builder.button(text="Рейтинг", callback_data="menu:leaderboard")
     builder.button(text="Правила", callback_data="menu:rules")
+    builder.button(text="Статистика", callback_data="menu:stats")
+    if not has_active_run:
+        builder.button(text="Поделиться", callback_data="menu:share")
     builder.adjust(1)
     return builder.as_markup()
 
