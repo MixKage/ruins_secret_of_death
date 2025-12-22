@@ -4,6 +4,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 from bot import db
+from bot.handlers.helpers import get_user_row
 
 router = Router()
 
@@ -46,12 +47,8 @@ def _format_share_message(state: dict, max_floor: int, rank: int | None) -> str:
 
 @router.callback_query(F.data == "menu:share")
 async def share_callback(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     user_id = user_row[0]

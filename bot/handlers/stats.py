@@ -1,10 +1,11 @@
 from aiogram import Router, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.game.data import ENEMIES
+from bot.handlers.helpers import get_user_row
 from bot.keyboards import main_menu_kb
+from bot.utils.telegram import edit_or_send
 
 router = Router()
 
@@ -58,12 +59,8 @@ def _format_stats(stats: dict, max_floor: int) -> str:
 
 @router.callback_query(F.data == "menu:stats")
 async def stats_callback(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     user_id = user_row[0]
@@ -73,11 +70,4 @@ async def stats_callback(callback: CallbackQuery) -> None:
     has_active = bool(await db.get_active_run(user_id))
 
     await callback.answer()
-    if callback.message:
-        try:
-            await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc):
-                raise
-    else:
-        await callback.bot.send_message(user.id, text, reply_markup=main_menu_kb(has_active_run=has_active))
+    await edit_or_send(callback, text, reply_markup=main_menu_kb(has_active_run=has_active))

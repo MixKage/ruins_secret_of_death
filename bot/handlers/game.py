@@ -1,5 +1,4 @@
 from aiogram import Router, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import db
@@ -16,6 +15,8 @@ from bot.game.logic import (
     render_state,
 )
 from bot.keyboards import battle_kb, boss_artifact_kb, event_kb, main_menu_kb, reward_kb, treasure_kb
+from bot.handlers.helpers import get_user_row
+from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
 
@@ -43,30 +44,19 @@ async def _send_state(callback: CallbackQuery, state: dict) -> None:
     else:
         markup = main_menu_kb(has_active_run=False)
 
-    if callback.message:
-        try:
-            await callback.message.edit_text(text, reply_markup=markup)
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc):
-                raise
-    else:
-        await callback.bot.send_message(callback.from_user.id, text, reply_markup=markup)
+    await edit_or_send(callback, text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "menu:continue")
 async def continue_run(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
         if callback.message:
-            await callback.message.edit_text("Нет активного забега.", reply_markup=main_menu_kb())
+            await safe_edit_text(callback.message, "Нет активного забега.", reply_markup=main_menu_kb())
         return
 
     _, state = active
@@ -96,12 +86,8 @@ async def start_new_run(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("action:"))
 async def battle_action(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     active = await db.get_active_run(user_row[0])
@@ -134,7 +120,8 @@ async def battle_action(callback: CallbackQuery) -> None:
         await db.record_run_stats(user_row[0], state, died=False)
         await callback.answer("Забег завершен.")
         if callback.message:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 "Вы покинули руины. Забег завершен.",
                 reply_markup=main_menu_kb(has_active_run=False),
             )
@@ -154,12 +141,8 @@ async def battle_action(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("treasure:"))
 async def treasure_choice(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     active = await db.get_active_run(user_row[0])
@@ -183,12 +166,8 @@ async def treasure_choice(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("boss:"))
 async def boss_artifact_choice(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     active = await db.get_active_run(user_row[0])
@@ -211,12 +190,8 @@ async def boss_artifact_choice(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("reward:"))
 async def reward_choice(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     active = await db.get_active_run(user_row[0])
@@ -239,12 +214,8 @@ async def reward_choice(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("event:"))
 async def event_choice(callback: CallbackQuery) -> None:
-    user = callback.from_user
-    if user is None:
-        return
-    user_row = await db.get_user_by_telegram(user.id)
+    user_row = await get_user_row(callback)
     if not user_row:
-        await callback.answer("Сначала нажмите /start", show_alert=True)
         return
 
     active = await db.get_active_run(user_row[0])

@@ -1,11 +1,11 @@
 from aiogram import Router, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from html import escape
 
 from bot import db
 from bot.keyboards import main_menu_kb
+from bot.utils.telegram import edit_or_send
 
 router = Router()
 
@@ -31,14 +31,7 @@ async def leaderboard_callback(callback: CallbackQuery) -> None:
         if user_row:
             has_active = bool(await db.get_active_run(user_row[0]))
     await callback.answer()
-    if callback.message:
-        try:
-            await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc):
-                raise
-    else:
-        await callback.bot.send_message(callback.from_user.id, text, reply_markup=main_menu_kb(has_active_run=has_active))
+    await edit_or_send(callback, text, reply_markup=main_menu_kb(has_active_run=has_active))
 
 
 @router.message(Command("leaderboard"))
