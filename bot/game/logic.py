@@ -61,7 +61,11 @@ def _percent(value: float) -> str:
 
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
-    return ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS if floor > BOSS_FLOOR else ENEMY_DAMAGE_BUDGET_RATIO
+    base = ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS if floor > BOSS_FLOOR else ENEMY_DAMAGE_BUDGET_RATIO
+    if floor > 20:
+        steps = (floor - 20) // 10
+        base += 0.1 * steps
+    return min(base, 1.0)
 
 
 def _last_breath_threshold(floor: int) -> int:
@@ -282,6 +286,10 @@ def generate_enemy_group(floor: int, player_hp_max: int, player_ap_max: int) -> 
             min_group = 3
         elif player_ap_max >= 3:
             min_group = 2
+    if floor > 20:
+        min_group += (floor - 20) // 10
+    if max_group < min_group:
+        max_group = min_group
     attempts = 0
     budget = max(1, player_hp_max) * _enemy_damage_budget_ratio(floor)
     while attempts < 30:

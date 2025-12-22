@@ -21,12 +21,54 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 router = Router()
 
 
+def _format_run_summary(state: dict, rank: int | None) -> str:
+    player = state.get("player", {})
+    floor = state.get("floor", 0)
+    weapon = player.get("weapon", {}).get("name", "Без оружия")
+    kills = state.get("kills", {}) or {}
+    total_kills = sum(kills.values())
+    chests_opened = state.get("chests_opened", 0)
+    treasures_found = state.get("treasures_found", 0)
+    hp_max = int(player.get("hp_max", 0))
+    ap_max = int(player.get("ap_max", 0))
+    armor = int(round(player.get("armor", 0)))
+    accuracy = int(round(player.get("accuracy", 0) * 100))
+    evasion = int(round(player.get("evasion", 0) * 100))
+    power = int(player.get("power", 0))
+    luck = int(round(player.get("luck", 0) * 100))
+
+    lines = [
+        "<b>Забег завершен</b>",
+        "Ссылка на бота: <a href=\"https://t.me/Ruins_GameBot\">t.me/Ruins_GameBot</a>",
+        f"<b>Достигнутый этаж:</b> {floor}",
+        f"<b>Оружие:</b> <b>{weapon}</b>",
+        f"<b>Убийств:</b> {total_kills}",
+        f"<b>Сундуков открыто:</b> {chests_opened}",
+        f"<b>Сокровищ найдено:</b> {treasures_found}",
+        "",
+        (
+            f"<b>Итоговые статы:</b> HP {hp_max} | ОД {ap_max} | "
+            f"Броня {armor} | Точность {accuracy}% | Уклонение {evasion}% | "
+            f"Сила +{power} | Удача {luck}%"
+        ),
+    ]
+    if rank is not None and rank <= 10:
+        lines.append(f"<b>Вы в топ-10:</b> место {rank}")
+    return "\n".join(lines)
+
+
 def _battle_markup(state: dict):
     player = state["player"]
     has_potion = bool(player.get("potions"))
     can_attack = player["ap"] > 0
+    can_endturn = player["ap"] <= 0
     show_info = bool(state.get("show_info"))
-    return battle_kb(has_potion=has_potion, can_attack=can_attack, show_info=show_info)
+    return battle_kb(
+        has_potion=has_potion,
+        can_attack=can_attack,
+        show_info=show_info,
+        can_endturn=can_endturn,
+    )
 
 
 async def _send_state(callback: CallbackQuery, state: dict) -> None:
@@ -112,6 +154,9 @@ async def battle_action(callback: CallbackQuery) -> None:
         await _send_state(callback, state)
         return
     elif action == "endturn":
+        if state["player"]["ap"] > 0:
+            await callback.answer("Сначала потратьте все ОД.", show_alert=True)
+            return
         end_turn(state)
     elif action == "forfeit":
         await db.update_run(run_id, state)
@@ -132,6 +177,25 @@ async def battle_action(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
+
+        await callback.answer()
+        if callback.message:
+            await safe_edit_text(callback.message, render_state(state), reply_markup=None)
+
+        leaderboard = await db.get_leaderboard_with_ids()
+        rank = None
+        for idx, (row_user_id, _username, _max_floor) in enumerate(leaderboard, start=1):
+            if row_user_id == user_row[0]:
+                rank = idx
+                break
+        summary_text = _format_run_summary(state, rank)
+        await callback.bot.send_message(callback.from_user.id, summary_text)
+        await callback.bot.send_message(
+            callback.from_user.id,
+            "Главное меню",
+            reply_markup=main_menu_kb(has_active_run=False),
+        )
+        return
     else:
         await db.update_run(run_id, state)
 
