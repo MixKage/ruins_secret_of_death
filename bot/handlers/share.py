@@ -77,5 +77,4 @@ async def share_callback(callback: CallbackQuery) -> None:
 
     text = _format_share_message(state, max_floor, rank)
     await callback.answer()
-    await callback.bot.send_message(user.id, text, disable_web_page_preview=True)
     await callback.bot.send_message(user.id, text)
