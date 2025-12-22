@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -12,7 +13,11 @@ router = Router()
 async def rules_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(RULES_TEXT, reply_markup=main_menu_kb())
+        try:
+            await callback.message.edit_text(RULES_TEXT, reply_markup=main_menu_kb())
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc):
+                raise
     else:
         await callback.bot.send_message(callback.from_user.id, RULES_TEXT, reply_markup=main_menu_kb())
 

@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import db
@@ -73,6 +74,10 @@ async def stats_callback(callback: CallbackQuery) -> None:
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
+        try:
+            await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc):
+                raise
     else:
         await callback.bot.send_message(user.id, text, reply_markup=main_menu_kb(has_active_run=has_active))

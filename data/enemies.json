@@ -185,8 +185,8 @@
     "base_hp": 32,
     "base_attack": 8,
     "base_armor": 4,
-    "base_accuracy": 0.6,
-    "base_evasion": 0.03,
+    "base_accuracy": 0.45,
+    "base_evasion": 0.0,
     "hp_per_floor": 4,
     "attack_per_floor": 1.5,
     "armor_per_floor": 0.4,
@@ -195,6 +195,24 @@
     "min_floor": 7,
     "max_floor": 9,
     "danger": "смертельная",
-    "info": "Каменная стена. Почти не уклоняется, но броня огромна."
+    "info": "Медлительный исполин. Почти не уклоняется и часто промахивается, но броня огромна."
+  },
+  {
+    "id": "necromancer",
+    "name": "Некромант",
+    "base_hp": 70,
+    "base_attack": 12,
+    "base_armor": 3,
+    "base_accuracy": 0.78,
+    "base_evasion": 0.08,
+    "hp_per_floor": 0,
+    "attack_per_floor": 0,
+    "armor_per_floor": 0,
+    "group_min": 1,
+    "group_max": 1,
+    "min_floor": 10,
+    "max_floor": 10,
+    "danger": "легендарная",
+    "info": "Создатель проклятия. Его слова пусты, но воля крепка."
   }
 ]

@@ -40,6 +40,22 @@ def reward_kb(reward_count: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def treasure_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Экипировать", callback_data="treasure:equip")
+    builder.button(text="Оставить", callback_data="treasure:leave")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for option in options:
+        builder.button(text=option["name"], callback_data=f"boss:{option['id']}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def event_kb(options: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for option in options:

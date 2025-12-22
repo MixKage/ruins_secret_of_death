@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from html import escape
@@ -31,7 +32,11 @@ async def leaderboard_callback(callback: CallbackQuery) -> None:
             has_active = bool(await db.get_active_run(user_row[0]))
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
+        try:
+            await callback.message.edit_text(text, reply_markup=main_menu_kb(has_active_run=has_active))
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc):
+                raise
     else:
         await callback.bot.send_message(callback.from_user.id, text, reply_markup=main_menu_kb(has_active_run=has_active))
 

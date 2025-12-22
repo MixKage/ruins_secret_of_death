@@ -44,6 +44,127 @@ python -m bot.main
 - `users`: id, telegram_id, username, max_floor, created_at
 - `runs`: id, user_id, started_at, ended_at, max_floor, is_active, state_json
 
+## Формат данных (JSON)
+
+### data/enemies.json
+- id - уникальный идентификатор врага.
+- name - отображаемое имя.
+- base_hp - базовое HP, к которому прибавляется рост по этажам.
+- base_attack - базовый урон, к которому прибавляется рост по этажам.
+- base_armor - базовая броня, к которой прибавляется рост по этажам.
+- base_accuracy - базовая точность врага (дальше увеличивается по этажам).
+- base_evasion - базовое уклонение врага (дальше увеличивается по этажам).
+- hp_per_floor - прибавка HP за этаж.
+- attack_per_floor - прибавка урона за этаж.
+- armor_per_floor - прибавка брони за этаж.
+- group_min - минимальный размер группы (зарезервировано).
+- group_max - максимальный размер группы (зарезервировано).
+- min_floor - минимальный этаж появления.
+- max_floor - максимальный этаж появления.
+- danger - текстовая оценка опасности.
+- info - короткая справка в бою.
+
+### data/weapons.json
+- id - уникальный идентификатор оружия.
+- name - отображаемое имя.
+- min_dmg - минимальный урон.
+- max_dmg - максимальный урон.
+- accuracy_bonus - бонус к точности (может быть отрицательным).
+- splash_ratio - доля урона, которая наносится всем остальным врагам.
+- bleed_chance - шанс наложить кровотечение.
+- bleed_damage - урон кровотечения за ход.
+- armor_pierce - доля брони, игнорируемая ударом (0.2 = 20%).
+- min_floor - минимальный этаж появления.
+- max_floor - максимальный этаж появления.
+- level - базовый уровень оружия для масштабирования в наградах.
+
+### data/upgrades.json
+- id - уникальный идентификатор улучшения.
+- name - отображаемое имя.
+- type - тип улучшения: stat или potion.
+- stat - имя характеристики (только для stat): hp_max, ap_max, accuracy, evasion, armor, power, luck.
+- amount - величина изменения характеристики (только для stat).
+- heal - восстановление HP (только для potion).
+- ap_restore - восстановление ОД (только для potion).
+- min_floor - минимальный этаж появления.
+- max_floor - максимальный этаж появления.
+
+## Формулы
+
+### Шанс попадания
+```text
+hit_chance = clamp(attacker_accuracy - defender_evasion, 0.15, 0.95)
+```
+- Для игрока: `attacker_accuracy = player.accuracy + weapon.accuracy_bonus`.
+- Для врага: `attacker_accuracy = enemy.accuracy`.
+- В состоянии «на последнем издыхании» точность игрока = 100%.
+
+### Урон игрока
+```text
+base_damage = rand(weapon.min_dmg, weapon.max_dmg) + player.power
+effective_armor = target.armor * (1 - weapon.armor_pierce)
+damage = max(1, int(base_damage - effective_armor))
+```
+
+### Сплэш-урон
+```text
+splash_damage = max(1, int(damage * weapon.splash_ratio))
+```
+Применяется ко всем остальным живым врагам.
+
+### Кровотечение
+```text
+if rand() < weapon.bleed_chance:
+    target.bleed_turns = max(target.bleed_turns, 2)
+    target.bleed_damage = max(target.bleed_damage, weapon.bleed_damage)
+
+# Каждый ход врага
+if target.bleed_turns > 0:
+    target.hp -= target.bleed_damage
+    target.bleed_turns -= 1
+```
+
+### Урон врага
+```text
+damage = max(1, int(enemy.attack - player.armor))
+```
+
+### Рост характеристик врага по этажам
+```text
+max_hp = int(base_hp + hp_per_floor * floor)
+attack = base_attack + attack_per_floor * floor
+armor = base_armor + armor_per_floor * floor
+accuracy = clamp(base_accuracy + floor * 0.01, 0.4, 0.95)
+evasion = clamp(base_evasion + floor * 0.005, 0.02, 0.3)
+```
+
+### Масштабирование оружия в наградах
+```text
+increase = floor - weapon.level
+weapon.min_dmg += increase
+weapon.max_dmg += increase
+weapon.bleed_damage += increase // 2
+weapon.level = floor
+```
+
+### Бюджет урона для генерации группы врагов
+```text
+budget = player.hp_max * ENEMY_DAMAGE_BUDGET_RATIO
+sum(enemy.attack) <= budget
+```
+Дополнительно ограничивается размер группы: 1 враг на этажах 1-3, 1-2 врага на 4-6, до 3 врагов дальше.
+
+### Шанс получить награду из сундука
+```text
+chance = clamp(0.2 + player.luck, 0.05, 0.8)
+```
+
+### «Последнее издыхание» (точность 100%)
+```text
+thresholds: 1-3 -> 10 HP, 4-6 -> 13 HP, 7-9 -> 15 HP
+после 9 этажа: +2 HP к порогу каждые 3 этажа
+```
+
 ## TODO для контента
 - Добавить больше врагов, оружия и апгрейдов.
 - Написать легенды/события этажей.

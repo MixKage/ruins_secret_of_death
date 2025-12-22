@@ -1,10 +1,13 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.game.logic import (
     apply_reward,
     apply_event_choice,
+    apply_boss_artifact_choice,
+    apply_treasure_choice,
     build_enemy_info_text,
     end_turn,
     new_run_state,
@@ -12,7 +15,7 @@ from bot.game.logic import (
     player_use_potion,
     render_state,
 )
-from bot.keyboards import battle_kb, event_kb, main_menu_kb, reward_kb
+from bot.keyboards import battle_kb, boss_artifact_kb, event_kb, main_menu_kb, reward_kb, treasure_kb
 
 router = Router()
 
@@ -33,11 +36,19 @@ async def _send_state(callback: CallbackQuery, state: dict) -> None:
         markup = reward_kb(len(state.get("rewards", [])))
     elif state["phase"] == "event":
         markup = event_kb(state.get("event_options", []))
+    elif state["phase"] == "boss_prep":
+        markup = boss_artifact_kb(state.get("boss_artifacts", []))
+    elif state["phase"] == "treasure":
+        markup = treasure_kb()
     else:
         markup = main_menu_kb(has_active_run=False)
 
     if callback.message:
-        await callback.message.edit_text(text, reply_markup=markup)
+        try:
+            await callback.message.edit_text(text, reply_markup=markup)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc):
+                raise
     else:
         await callback.bot.send_message(callback.from_user.id, text, reply_markup=markup)
 
@@ -137,6 +148,63 @@ async def battle_action(callback: CallbackQuery) -> None:
     else:
         await db.update_run(run_id, state)
 
+    await callback.answer()
+    await _send_state(callback, state)
+
+
+@router.callback_query(F.data.startswith("treasure:"))
+async def treasure_choice(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    if user is None:
+        return
+    user_row = await db.get_user_by_telegram(user.id)
+    if not user_row:
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        return
+
+    run_id, state = active
+    if state["phase"] != "treasure":
+        await callback.answer("Сейчас не время для сундука.", show_alert=True)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    equip = action == "equip"
+    apply_treasure_choice(state, equip)
+
+    await db.update_run(run_id, state)
+    await callback.answer()
+    await _send_state(callback, state)
+
+
+@router.callback_query(F.data.startswith("boss:"))
+async def boss_artifact_choice(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    if user is None:
+        return
+    user_row = await db.get_user_by_telegram(user.id)
+    if not user_row:
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        return
+
+    run_id, state = active
+    if state["phase"] != "boss_prep":
+        await callback.answer("Сейчас не время для артефакта.", show_alert=True)
+        return
+
+    artifact_id = callback.data.split(":", 1)[1]
+    apply_boss_artifact_choice(state, artifact_id)
+
+    await db.update_run(run_id, state)
     await callback.answer()
     await _send_state(callback, state)
 
