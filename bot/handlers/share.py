@@ -51,6 +51,10 @@ async def share_callback(callback: CallbackQuery) -> None:
     if not user_row:
         return
 
+    user = callback.from_user
+    if user is None:
+        return
+
     user_id = user_row[0]
     active = await db.get_active_run(user_id)
     if active:
