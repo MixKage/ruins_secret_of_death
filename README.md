@@ -162,7 +162,7 @@ sum(enemy.attack) <= budget
 
 ### Шанс получить награду из сундука
 ```text
-chance = clamp(0.2 + player.luck, 0.05, 0.8)
+chance = clamp(player.luck, 0.05, 0.8)
 ```
 
 ### «Последнее издыхание» (точность 100%)

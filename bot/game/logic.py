@@ -245,7 +245,7 @@ def new_run_state() -> Dict:
         "accuracy": 0.7,
         "evasion": 0.05,
         "power": 1,
-        "luck": 0.0,
+        "luck": 0.2,
         "weapon": weapon,
         "potions": [potion] if potion else [],
     }
@@ -646,7 +646,7 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
     elif event_id == "treasure_chest":
         state["chests_opened"] = state.get("chests_opened", 0) + 1
-        chance = _clamp(0.2 + player["luck"], 0.05, 0.8)
+        chance = _clamp(player["luck"], 0.05, 0.8)
         if random.random() < chance:
             reward = generate_single_reward(state["floor"] + 2)
             _append_log(state, "Сундук раскрывает <b>редкую</b> находку.")
