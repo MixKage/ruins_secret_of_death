@@ -488,9 +488,10 @@ def player_attack(state: Dict) -> None:
             splash_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
             if splash_targets:
                 splash_damage = max(1, int(damage * weapon["splash_ratio"]))
-                for enemy in splash_targets:
+                hit_targets = splash_targets[:3]
+                for enemy in hit_targets:
                     enemy["hp"] -= splash_damage
-                _append_log(state, f"Сплэш урон: {splash_damage} по всем оставшимся врагам.")
+                _append_log(state, f"Сплэш урон: {splash_damage} по {len(hit_targets)} врагам.")
 
         if weapon["bleed_chance"] > 0 and random.random() < weapon["bleed_chance"]:
             target["bleed_turns"] = max(target["bleed_turns"], 2)
