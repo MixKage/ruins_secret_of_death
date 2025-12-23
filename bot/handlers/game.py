@@ -1,5 +1,6 @@
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, Message
 
 from bot import db
 from bot.game.logic import (
@@ -73,20 +74,22 @@ def _battle_markup(state: dict):
 
 async def _send_state(callback: CallbackQuery, state: dict) -> None:
     text = render_state(state)
-    if state["phase"] == "battle":
-        markup = _battle_markup(state)
-    elif state["phase"] == "reward":
-        markup = reward_kb(len(state.get("rewards", [])))
-    elif state["phase"] == "event":
-        markup = event_kb(state.get("event_options", []))
-    elif state["phase"] == "boss_prep":
-        markup = boss_artifact_kb(state.get("boss_artifacts", []))
-    elif state["phase"] == "treasure":
-        markup = treasure_kb()
-    else:
-        markup = main_menu_kb(has_active_run=False)
-
+    markup = _markup_for_state(state)
     await edit_or_send(callback, text, reply_markup=markup)
+
+
+def _markup_for_state(state: dict):
+    if state["phase"] == "battle":
+        return _battle_markup(state)
+    if state["phase"] == "reward":
+        return reward_kb(len(state.get("rewards", [])))
+    if state["phase"] == "event":
+        return event_kb(state.get("event_options", []))
+    if state["phase"] == "boss_prep":
+        return boss_artifact_kb(state.get("boss_artifacts", []))
+    if state["phase"] == "treasure":
+        return treasure_kb()
+    return main_menu_kb(has_active_run=False)
 
 
 @router.callback_query(F.data == "menu:continue")
@@ -124,6 +127,30 @@ async def start_new_run(callback: CallbackQuery) -> None:
     await db.create_run(user_id, state)
     await callback.answer()
     await _send_state(callback, state)
+
+
+@router.message(Command("reset"))
+async def reset_handler(message: Message) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    user_id = await db.ensure_user(user.id, user.username)
+    active = await db.get_active_run(user_id)
+    if not active:
+        await message.answer("Активного забега нет.", reply_markup=main_menu_kb(has_active_run=False))
+        return
+
+    _, state = active
+    phase_name = {
+        "battle": "бой",
+        "reward": "награда",
+        "event": "комнаты",
+        "boss_prep": "артефакты перед боссом",
+        "treasure": "сундук",
+        "dead": "смерть",
+    }.get(state.get("phase"), state.get("phase", "неизвестно"))
+    await message.answer(f"<b>Текущая фаза:</b> {phase_name}")
+    await message.answer(render_state(state), reply_markup=_markup_for_state(state))
 
 
 @router.callback_query(F.data.startswith("action:"))
