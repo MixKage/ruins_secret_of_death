@@ -62,6 +62,15 @@ def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="<-", callback_data=f"menu:leaderboard:page:{page - 1}")
+    builder.button(text="меню", callback_data="menu:main")
+    builder.button(text="->", callback_data=f"menu:leaderboard:page:{page + 1}")
+    builder.adjust(3)
+    return builder.as_markup()
+
+
 def event_kb(options: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for option in options:

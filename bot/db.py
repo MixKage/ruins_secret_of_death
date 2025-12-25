@@ -142,6 +142,23 @@ async def get_leaderboard(limit: int = 10) -> List[Tuple]:
         return await cursor.fetchall()
 
 
+async def get_leaderboard_page(limit: int, offset: int) -> List[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT username, max_floor FROM users "
+            "ORDER BY max_floor DESC, username ASC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        return await cursor.fetchall()
+
+
+async def get_leaderboard_total() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
 async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]]:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
