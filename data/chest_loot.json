@@ -1,0 +1,112 @@
+[
+  {
+    "type": "weapon",
+    "id": "crypt_dagger",
+    "min_floor": 1
+  },
+  {
+    "type": "weapon",
+    "id": "splintered_halberd",
+    "min_floor": 1
+  },
+  {
+    "type": "weapon",
+    "id": "ritual_mace",
+    "min_floor": 4
+  },
+  {
+    "type": "weapon",
+    "id": "chain_flail",
+    "min_floor": 4
+  },
+  {
+    "type": "weapon",
+    "id": "obsidian_blade",
+    "min_floor": 4
+  },
+  {
+    "type": "weapon",
+    "id": "sanctum_lance",
+    "min_floor": 4
+  },
+  {
+    "type": "weapon",
+    "id": "relic_scythe",
+    "min_floor": 7
+  },
+  {
+    "type": "weapon",
+    "id": "sunsteel_lance",
+    "min_floor": 7
+  },
+  {
+    "type": "weapon",
+    "id": "hexed_blade",
+    "min_floor": 7
+  },
+  {
+    "type": "weapon",
+    "id": "doom_hammer",
+    "min_floor": 7
+  },
+  {
+    "type": "upgrade",
+    "id": "vitality",
+    "min_floor": 3
+  },
+  {
+    "type": "upgrade",
+    "id": "stamina",
+    "min_floor": 4
+  },
+  {
+    "type": "upgrade",
+    "id": "focus",
+    "min_floor": 1
+  },
+  {
+    "type": "upgrade",
+    "id": "agility",
+    "min_floor": 1
+  },
+  {
+    "type": "upgrade",
+    "id": "plating",
+    "min_floor": 1
+  },
+  {
+    "type": "upgrade",
+    "id": "power",
+    "min_floor": 1
+  },
+  {
+    "type": "upgrade",
+    "id": "lucky_amulet",
+    "min_floor": 1
+  },
+  {
+    "type": "upgrade",
+    "id": "potion_strong",
+    "min_floor": 4
+  },
+  {
+    "type": "upgrade",
+    "id": "potion_medium",
+    "min_floor": 10
+  },
+  {
+    "type": "scroll",
+    "id": "scroll_fire",
+    "min_floor": 1
+  },
+  {
+    "type": "scroll",
+    "id": "scroll_ice",
+    "min_floor": 1
+  },
+  {
+    "type": "scroll",
+    "id": "scroll_lightning",
+    "min_floor": 15
+  }
+]

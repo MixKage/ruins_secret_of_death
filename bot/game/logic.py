@@ -2,7 +2,7 @@ import copy
 import random
 from typing import Dict, List, Tuple
 
-from .data import ENEMIES, UPGRADES, WEAPONS, get_upgrade_by_id
+from .data import CHEST_LOOT, ENEMIES, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
 
 
 MAX_LOG_LINES = 4
@@ -58,6 +58,22 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _percent(value: float) -> str:
     return f"{int(round(value * 100))}%"
+
+
+def _magic_scroll_damage(player: Dict) -> int:
+    weapon = player.get("weapon", {})
+    max_weapon = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
+    dmg = max_weapon * int(player.get("ap_max", 1))
+    return max(20, int(dmg))
+
+
+def _apply_burn(enemy: Dict, damage: int) -> None:
+    enemy["burn_turns"] = max(enemy.get("burn_turns", 0), 1)
+    enemy["burn_damage"] = max(enemy.get("burn_damage", 0), damage)
+
+
+def _apply_freeze(enemy: Dict) -> None:
+    enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
 
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
@@ -157,6 +173,16 @@ def _enemies_for_floor(floor: int) -> List[Dict]:
     return enemies or ENEMIES
 
 
+def _chest_loot_for_floor(floor: int) -> List[Dict]:
+    filtered = []
+    for item in CHEST_LOOT:
+        min_floor = item.get("min_floor", 1)
+        max_floor = item.get("max_floor", 999)
+        if min_floor <= floor <= max_floor:
+            filtered.append(item)
+    return filtered
+
+
 def _upgrades_for_floor(floor: int) -> List[Dict]:
     upgrades = _filter_by_floor(UPGRADES, floor)
     return upgrades or UPGRADES
@@ -225,6 +251,9 @@ def build_boss(player: Dict) -> Dict:
         "evasion": evasion,
         "bleed_turns": 0,
         "bleed_damage": 0,
+        "burn_turns": 0,
+        "burn_damage": 0,
+        "skip_turns": 0,
         "counted_dead": False,
         "info": "Создатель проклятия. Его слова пусты, но воля крепка.",
         "danger": "легендарная",
@@ -236,6 +265,7 @@ def build_boss(player: Dict) -> Dict:
 def new_run_state() -> Dict:
     weapon = copy.deepcopy(random.choice(_weapons_for_floor(1)))
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
+    ice_scroll = copy.deepcopy(get_scroll_by_id("scroll_ice"))
     player = {
         "hp": 30,
         "hp_max": 30,
@@ -248,6 +278,7 @@ def new_run_state() -> Dict:
         "luck": 0.2,
         "weapon": weapon,
         "potions": [potion] if potion else [],
+        "scrolls": [ice_scroll] if ice_scroll else [],
     }
     state = {
         "floor": 1,
@@ -324,6 +355,9 @@ def build_enemy(template: Dict, floor: int) -> Dict:
         "evasion": evasion,
         "bleed_turns": 0,
         "bleed_damage": 0,
+        "burn_turns": 0,
+        "burn_damage": 0,
+        "skip_turns": 0,
         "counted_dead": False,
         "info": template.get("info", ""),
         "danger": template.get("danger", "неизвестна"),
@@ -517,6 +551,42 @@ def player_use_potion(state: Dict) -> None:
     check_battle_end(state)
 
 
+def player_use_scroll(state: Dict, scroll_index: int) -> None:
+    player = state["player"]
+    scrolls = player.get("scrolls", [])
+    if player["ap"] <= 0:
+        _append_log(state, "Нет ОД для использования свитка.")
+        return
+    if scroll_index < 0 or scroll_index >= len(scrolls):
+        _append_log(state, "Свиток не найден.")
+        return
+    target = _first_alive(state["enemies"])
+    if target is None:
+        _append_log(state, "Некого поражать магией.")
+        return
+
+    scroll = scrolls.pop(scroll_index)
+    player["ap"] -= 1
+    damage = _magic_scroll_damage(player)
+    element = scroll.get("element")
+
+    if element == "lightning":
+        targets = _alive_enemies(state["enemies"])
+        for enemy in targets:
+            enemy["hp"] -= damage
+        _append_log(state, f"Вы читаете {scroll['name']}: молнии бьют по всем врагам на {damage} урона.")
+    elif element == "ice":
+        target["hp"] -= damage
+        _apply_freeze(target)
+        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и скован льдом.")
+    else:
+        target["hp"] -= damage
+        _apply_burn(target, damage)
+        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и горит.")
+
+    check_battle_end(state)
+
+
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
     enemies = _alive_enemies(state["enemies"])
@@ -526,6 +596,10 @@ def enemy_phase(state: Dict) -> None:
             enemy["hp"] -= enemy["bleed_damage"]
             enemy["bleed_turns"] -= 1
             _append_log(state, f"{enemy['name']} теряет {enemy['bleed_damage']} HP от кровотечения.")
+        if enemy.get("burn_turns", 0) > 0:
+            enemy["hp"] -= enemy.get("burn_damage", 0)
+            enemy["burn_turns"] -= 1
+            _append_log(state, f"{enemy['name']} горит и теряет {enemy.get('burn_damage', 0)} HP.")
 
     _tally_kills(state)
     enemies = _alive_enemies(state["enemies"])
@@ -533,6 +607,10 @@ def enemy_phase(state: Dict) -> None:
         return
 
     for enemy in enemies:
+        if enemy.get("skip_turns", 0) > 0:
+            enemy["skip_turns"] -= 1
+            _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
+            continue
         if roll_hit(enemy["accuracy"], player["evasion"]):
             damage = max(1, int(enemy["attack"] - player["armor"]))
             player["hp"] -= damage
@@ -562,6 +640,32 @@ def check_battle_end(state: Dict) -> None:
 
 def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
+
+
+def _build_chest_reward(floor: int) -> Dict | None:
+    pool = _chest_loot_for_floor(floor)
+    if not pool:
+        return None
+    entry = copy.deepcopy(random.choice(pool))
+    item_type = entry.get("type")
+    item_id = entry.get("id")
+    if item_type == "weapon":
+        weapon = copy.deepcopy(get_weapon_by_id(item_id))
+        if not weapon:
+            return None
+        scale_weapon_stats(weapon, floor)
+        return {"type": "weapon", "item": weapon}
+    if item_type == "upgrade":
+        upgrade = copy.deepcopy(get_upgrade_by_id(item_id))
+        if not upgrade:
+            return None
+        return {"type": "upgrade", "item": upgrade}
+    if item_type == "scroll":
+        scroll = copy.deepcopy(get_scroll_by_id(item_id))
+        if not scroll:
+            return None
+        return {"type": "scroll", "item": scroll}
+    return None
 
 
 def generate_rewards(floor: int) -> List[Dict]:
@@ -613,6 +717,10 @@ def apply_reward_item(state: Dict, reward: Dict) -> None:
 
         if upgrade.get("stat") == "luck":
             player["luck"] = _clamp(player["luck"], 0.0, 0.8)
+    elif reward["type"] == "scroll":
+        scroll = reward["item"]
+        player.setdefault("scrolls", []).append(scroll)
+        _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
 
 
 def prepare_event(state: Dict) -> None:
@@ -647,9 +755,11 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
     elif event_id == "treasure_chest":
         state["chests_opened"] = state.get("chests_opened", 0) + 1
-        chance = _clamp(player["luck"], 0.05, 0.8)
+        chance = _clamp(player["luck"], 0.05, 0.7)
         if random.random() < chance:
-            reward = generate_single_reward(state["floor"] + 2)
+            reward = _build_chest_reward(state["floor"] + 2)
+            if not reward:
+                reward = generate_single_reward(state["floor"] + 2)
             _append_log(state, "Сундук раскрывает <b>редкую</b> находку.")
             state["phase"] = "treasure"
             state["treasure_reward"] = reward
@@ -754,7 +864,7 @@ def render_state(state: Dict) -> str:
         lines.append("<b>Состояние:</b> <i>На последнем издыхании — точность 100%</i>")
     lines.extend([
         f"<b>Оружие:</b> <b>{weapon['name']}</b> (урон {weapon['min_dmg']}-{weapon['max_dmg']})",
-        f"<b>Зелий:</b> {len(player.get('potions', []))}",
+        f"<b>Зелий:</b> {len(player.get('potions', []))} | <b>Свитков:</b> {len(player.get('scrolls', []))}",
         "",
     ])
 
@@ -808,6 +918,20 @@ def render_state(state: Dict) -> str:
             lines.append("<i>Экипировать находку или оставить?</i>")
         else:
             lines.append("<i>Ничего не найдено.</i>")
+    elif state["phase"] == "inventory":
+        lines.append("<b>Инвентарь:</b>")
+        magic_damage = _magic_scroll_damage(player)
+        lines.append(f"<b>Магический урон:</b> {magic_damage} | <b>Стоимость:</b> 1 ОД")
+        scrolls = player.get("scrolls", [])
+        if scrolls:
+            for idx, scroll in enumerate(scrolls, start=1):
+                desc = scroll.get("desc", "").strip()
+                desc_text = f" — <i>{desc}</i>" if desc else ""
+                lines.append(f"{idx}. <b>{scroll['name']}</b>{desc_text}")
+            lines.append("")
+            lines.append("<i>Выберите свиток для использования.</i>")
+        else:
+            lines.append("<i>Свитков нет.</i>")
     elif state["phase"] == "dead":
         lines.append("<b>Вы погибли.</b>")
 
@@ -856,4 +980,7 @@ def _format_reward_details(reward_type: str, item: Dict) -> str:
             return f"({sign}{amount_text} {stat_name})"
         if item["type"] == "potion":
             return f"(+{item['heal']} HP, +{item['ap_restore']} ОД)"
+    if reward_type == "scroll":
+        desc = item.get("desc", "").strip()
+        return f"(<i>{desc}</i>)" if desc else ""
     return ""

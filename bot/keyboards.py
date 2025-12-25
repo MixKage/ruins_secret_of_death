@@ -21,20 +21,35 @@ def main_menu_kb(has_active_run: bool = False) -> InlineKeyboardMarkup:
 def battle_kb(
     has_potion: bool,
     can_attack: bool,
+    can_attack_all: bool,
     show_info: bool,
     can_endturn: bool,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if can_attack:
         builder.button(text="Атаковать", callback_data="action:attack")
+    if can_attack_all:
+        builder.button(text="Атаковать на все ОД", callback_data="action:attack_all")
     if can_endturn:
         builder.button(text="Завершить ход", callback_data="action:endturn")
     if has_potion:
         builder.button(text="Зелье", callback_data="action:potion")
+    builder.button(text="Инвентарь", callback_data="action:inventory")
     info_text = "Скрыть справку" if show_info else "Справка"
     builder.button(text=info_text, callback_data="action:info")
     builder.button(text="Сдаться", callback_data="action:forfeit")
     builder.adjust(2)
+    return builder.as_markup()
+
+
+
+
+def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, scroll in enumerate(scrolls):
+        builder.button(text=scroll["name"], callback_data=f"inventory:use:{idx}")
+    builder.button(text="Назад", callback_data="inventory:back")
+    builder.adjust(1)
     return builder.as_markup()
 
 

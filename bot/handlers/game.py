@@ -13,9 +13,18 @@ from bot.game.logic import (
     new_run_state,
     player_attack,
     player_use_potion,
+    player_use_scroll,
     render_state,
 )
-from bot.keyboards import battle_kb, boss_artifact_kb, event_kb, main_menu_kb, reward_kb, treasure_kb
+from bot.keyboards import (
+    battle_kb,
+    boss_artifact_kb,
+    event_kb,
+    inventory_kb,
+    main_menu_kb,
+    reward_kb,
+    treasure_kb,
+)
 from bot.handlers.helpers import get_user_row
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
@@ -62,11 +71,13 @@ def _battle_markup(state: dict):
     player = state["player"]
     has_potion = bool(player.get("potions"))
     can_attack = player["ap"] > 0
+    can_attack_all = player["ap"] > 1
     can_endturn = player["ap"] <= 0
     show_info = bool(state.get("show_info"))
     return battle_kb(
         has_potion=has_potion,
         can_attack=can_attack,
+        can_attack_all=can_attack_all,
         show_info=show_info,
         can_endturn=can_endturn,
     )
@@ -89,6 +100,8 @@ def _markup_for_state(state: dict):
         return boss_artifact_kb(state.get("boss_artifacts", []))
     if state["phase"] == "treasure":
         return treasure_kb()
+    if state["phase"] == "inventory":
+        return inventory_kb(state["player"].get("scrolls", []))
     return main_menu_kb(has_active_run=False)
 
 
@@ -147,6 +160,7 @@ async def reset_handler(message: Message) -> None:
         "event": "комнаты",
         "boss_prep": "артефакты перед боссом",
         "treasure": "сундук",
+        "inventory": "инвентарь",
         "dead": "смерть",
     }.get(state.get("phase"), state.get("phase", "неизвестно"))
     await message.answer(f"<b>Текущая фаза:</b> {phase_name}")
@@ -172,6 +186,17 @@ async def battle_action(callback: CallbackQuery) -> None:
     action = callback.data.split(":", 1)[1]
     if action == "attack":
         player_attack(state)
+    elif action == "attack_all":
+        while state["phase"] == "battle" and state["player"]["ap"] > 0:
+            player_attack(state)
+            if state["phase"] != "battle":
+                break
+    elif action == "inventory":
+        state["phase"] = "inventory"
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state)
+        return
     elif action == "potion":
         player_use_potion(state)
     elif action == "info":
@@ -230,6 +255,46 @@ async def battle_action(callback: CallbackQuery) -> None:
     await _send_state(callback, state)
 
 
+
+
+@router.callback_query(F.data.startswith("inventory:"))
+async def inventory_action(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        return
+
+    run_id, state = active
+    if state["phase"] != "inventory":
+        await callback.answer("Сейчас не инвентарь.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "back":
+        state["phase"] = "battle"
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state)
+        return
+    if action == "use" and len(parts) > 2:
+        try:
+            index = int(parts[2])
+        except ValueError:
+            await callback.answer("Неверный свиток.", show_alert=True)
+            return
+        state["phase"] = "battle"
+        player_use_scroll(state, index)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state)
+        return
+
+    await callback.answer("Неверное действие.", show_alert=True)
 @router.callback_query(F.data.startswith("treasure:"))
 async def treasure_choice(callback: CallbackQuery) -> None:
     user_row = await get_user_row(callback)
