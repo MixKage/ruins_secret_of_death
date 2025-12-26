@@ -2,7 +2,7 @@ import copy
 import random
 from typing import Dict, List, Tuple
 
-from .data import CHEST_LOOT, ENEMIES, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
+from .data import CHEST_LOOT, ENEMIES, SCROLLS, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
 
 MAX_LOG_LINES = 4
 
@@ -42,7 +42,7 @@ BOSS_ARTIFACT_OPTIONS = [
     {
         "id": "artifact_potions",
         "name": "Алхимический набор",
-        "effect": "2 средних зелья",
+        "effect": "2 средних зелья + случайный свиток",
     },
 ]
 
@@ -157,6 +157,14 @@ def _grant_small_potion(player: Dict) -> Tuple[int, int]:
 def _grant_medium_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
     potion = copy.deepcopy(get_upgrade_by_id("potion_medium"))
     return _add_potion(player, potion, count=count)
+
+
+def _grant_random_scroll(player: Dict) -> Dict | None:
+    if not SCROLLS:
+        return None
+    scroll = copy.deepcopy(random.choice(SCROLLS))
+    player.setdefault("scrolls", []).append(scroll)
+    return scroll
 
 def _mutate_enemy_template(template: Dict) -> Dict:
     mutated = copy.deepcopy(template)
@@ -935,10 +943,13 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         _append_log(state, "Артефакт воли укрепляет дух: <b>+1</b> к макс. ОД.")
     elif artifact_id == "artifact_potions":
         added, dropped = _grant_medium_potion(player, count=2)
+        scroll = _grant_random_scroll(player)
         if added == 1:
             _append_log(state, "Алхимический набор дарует <b>среднее зелье</b>.")
         elif added > 1:
             _append_log(state, f"Алхимический набор дарует <b>{added} средних зелья</b>.")
+        if scroll:
+            _append_log(state, f"Также вы получаете свиток <b>{scroll['name']}</b>.")
         if dropped:
             _append_log(state, "Лишние зелья сгорают.")
     else:
