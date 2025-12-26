@@ -44,6 +44,14 @@ def battle_kb(
 
 
 
+def forfeit_confirm_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Да, сдаться", callback_data="forfeit:confirm")
+    builder.button(text="Отмена", callback_data="forfeit:cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if small_count > 0:

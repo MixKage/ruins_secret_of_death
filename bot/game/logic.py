@@ -974,7 +974,7 @@ def render_state(state: Dict) -> str:
         "",
     ])
 
-    if state["phase"] == "battle":
+    if state["phase"] in {"battle", "forfeit_confirm"}:
         if enemies:
             lines.append("<b>Враги:</b>")
             for enemy in enemies:
@@ -984,6 +984,9 @@ def render_state(state: Dict) -> str:
         if state.get("show_info"):
             lines.append("")
             lines.append(build_enemy_info_text(state.get("enemies", []), player, state.get("floor", 1)))
+        if state["phase"] == "forfeit_confirm":
+            lines.append("")
+            lines.append("<i>Подтвердите сдачу. Забег будет завершен.</i>")
     elif state["phase"] == "reward":
         if state.get("boss_defeated") and state.get("floor") == BOSS_FLOOR:
             lines.append("<b>Некромант повержен.</b> Его чары рассеялись над залом.")

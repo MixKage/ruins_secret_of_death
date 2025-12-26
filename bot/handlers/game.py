@@ -29,6 +29,7 @@ from bot.keyboards import (
     main_menu_kb,
     reward_kb,
     treasure_kb,
+    forfeit_confirm_kb,
 )
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.utils.telegram import edit_or_send, safe_edit_text
@@ -44,6 +45,21 @@ async def _show_main_menu(callback: CallbackQuery, text: str = "Главное �
             callback.from_user.id,
             text,
             reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin),
+        )
+
+
+
+async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, state: dict) -> None:
+    await db.update_run(run_id, state)
+    await db.finish_run(run_id, state.get("floor", 0))
+    await db.update_user_max_floor(user_id, state.get("floor", 0))
+    await db.record_run_stats(user_id, state, died=False)
+    await callback.answer("Забег завершен.")
+    if callback.message:
+        await safe_edit_text(
+            callback.message,
+            "Вы покинули руины. Забег завершен.",
+            reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
         )
 
 
@@ -125,6 +141,8 @@ async def _send_state(callback: CallbackQuery, state: dict, run_id: int | None =
 def _markup_for_state(state: dict, is_admin: bool = False):
     if state["phase"] == "battle":
         return _battle_markup(state)
+    if state["phase"] == "forfeit_confirm":
+        return forfeit_confirm_kb()
     if state["phase"] == "reward":
         return reward_kb(len(state.get("rewards", [])))
     if state["phase"] == "event":
@@ -264,17 +282,10 @@ async def battle_action(callback: CallbackQuery) -> None:
             return
         end_turn(state)
     elif action == "forfeit":
+        state["phase"] = "forfeit_confirm"
         await db.update_run(run_id, state)
-        await db.finish_run(run_id, state.get("floor", 0))
-        await db.update_user_max_floor(user_row[0], state.get("floor", 0))
-        await db.record_run_stats(user_row[0], state, died=False)
-        await callback.answer("Забег завершен.")
-        if callback.message:
-            await safe_edit_text(
-                callback.message,
-                "Вы покинули руины. Забег завершен.",
-                reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
-            )
+        await callback.answer()
+        await _send_state(callback, state, run_id)
         return
 
     if state["phase"] == "dead":
@@ -307,6 +318,36 @@ async def battle_action(callback: CallbackQuery) -> None:
     await callback.answer()
     await _send_state(callback, state, run_id)
 
+
+
+@router.callback_query(F.data.startswith("forfeit:"))
+async def forfeit_action(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
+        return
+
+    run_id, state = active
+    action = callback.data.split(":", 1)[1]
+    if action == "cancel":
+        if state.get("phase") == "forfeit_confirm":
+            state["phase"] = "battle"
+            await db.update_run(run_id, state)
+        await callback.answer("Отмена.")
+        await _send_state(callback, state, run_id)
+        return
+    if action == "confirm":
+        if state.get("phase") != "forfeit_confirm":
+            await callback.answer("Нечего подтверждать.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        await _handle_forfeit(callback, user_row[0], run_id, state)
+        return
 
 
 
