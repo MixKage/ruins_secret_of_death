@@ -12,6 +12,7 @@ from bot.game.logic import (
     build_fallen_boss_intro,
     count_potions,
     end_turn,
+    enforce_ap_cap,
     new_run_state,
     player_attack,
     player_use_potion,
@@ -132,6 +133,8 @@ def _battle_markup(state: dict):
 async def _send_state(callback: CallbackQuery, state: dict, run_id: int | None = None) -> None:
     if run_id is not None:
         await _ensure_fallen_boss_details(run_id, state)
+        if enforce_ap_cap(state):
+            await db.update_run(run_id, state)
     text = render_state(state)
     is_admin = is_admin_user(callback.from_user)
     markup = _markup_for_state(state, is_admin=is_admin)

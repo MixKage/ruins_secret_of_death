@@ -12,6 +12,9 @@ ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
 LUCK_MAX = 0.8
 FULL_HEALTH_DAMAGE_BONUS = 0.2
 
+AP_MAX_BASE_CAP = 4
+AP_MAX_STEP_PER_TIER = 2
+
 POTION_LIMITS = {
     "potion_small": 10,
     "potion_medium": 5,
@@ -137,6 +140,32 @@ def _has_resolve(player: Dict) -> bool:
     if hp_max <= 0:
         return False
     return player.get("hp", 0) >= hp_max
+
+
+def _ap_max_cap_for_floor(floor: int) -> int:
+    safe_floor = max(1, int(floor or 1))
+    return AP_MAX_BASE_CAP + AP_MAX_STEP_PER_TIER * (safe_floor // 10)
+
+
+def _is_ap_max_capped(player: Dict, floor: int) -> bool:
+    return int(player.get("ap_max", 0)) >= _ap_max_cap_for_floor(floor)
+
+
+def _enforce_ap_max_cap(player: Dict, floor: int) -> bool:
+    cap = _ap_max_cap_for_floor(floor)
+    current = int(player.get("ap_max", 0))
+    if current <= cap:
+        return False
+    player["ap_max"] = cap
+    if player.get("ap", 0) > cap:
+        player["ap"] = cap
+    return True
+
+def enforce_ap_cap(state: Dict) -> bool:
+    player = state.get("player")
+    if not player:
+        return False
+    return _enforce_ap_max_cap(player, state.get("floor", 1))
 
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
@@ -265,15 +294,31 @@ def _chest_loot_for_floor(floor: int) -> List[Dict]:
 
 
 
-def _filter_chest_loot_for_player(pool: List[Dict], player: Dict | None) -> List[Dict]:
-    if not player or not _is_luck_maxed(player):
+def _filter_chest_loot_for_player(pool: List[Dict], player: Dict | None, floor: int) -> List[Dict]:
+    if not player:
         return pool
-    return [item for item in pool if not (item.get("type") == "upgrade" and item.get("id") == "lucky_amulet")]
+    filtered = pool
+    if _is_luck_maxed(player):
+        filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "lucky_amulet")]
+    if _is_ap_max_capped(player, floor):
+        filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "stamina")]
+    return filtered
 
 
 def _upgrades_for_floor(floor: int) -> List[Dict]:
     upgrades = _filter_by_floor(UPGRADES, floor)
     return upgrades or UPGRADES
+
+
+def _filter_upgrades_for_player(upgrades: List[Dict], player: Dict | None, floor: int) -> List[Dict]:
+    if not player:
+        return upgrades
+    filtered = upgrades
+    if _is_luck_maxed(player):
+        filtered = [item for item in filtered if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
+    if _is_ap_max_capped(player, floor):
+        filtered = [item for item in filtered if not (item.get("stat") == "ap_max" or item.get("id") == "stamina")]
+    return filtered
 
 def scale_weapon_stats(weapon: Dict, floor: int) -> None:
     current_level = weapon.get("level", 1)
@@ -615,6 +660,7 @@ def end_turn(state: Dict) -> None:
     if state["phase"] != "battle":
         return
     player = state["player"]
+    _enforce_ap_max_cap(player, state["floor"])
     player["ap"] = player["ap_max"]
     enemy_phase(state)
     _tally_kills(state)
@@ -777,7 +823,7 @@ def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
 
 def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
-    pool = _filter_chest_loot_for_player(_chest_loot_for_floor(floor), player)
+    pool = _filter_chest_loot_for_player(_chest_loot_for_floor(floor), player, floor)
     if not pool:
         return None
     entry = copy.deepcopy(random.choice(pool))
@@ -806,9 +852,7 @@ def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
 def generate_rewards(floor: int, player: Dict | None = None) -> List[Dict]:
     rewards = []
     used_ids = set()
-    upgrades = _upgrades_for_floor(floor)
-    if player and _is_luck_maxed(player):
-        upgrades = [item for item in upgrades if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
+    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor)
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in upgrades
     ]
@@ -825,9 +869,7 @@ def generate_rewards(floor: int, player: Dict | None = None) -> List[Dict]:
     return rewards
 
 def generate_single_reward(floor: int, player: Dict | None = None) -> Dict:
-    upgrades = _upgrades_for_floor(floor)
-    if player and _is_luck_maxed(player):
-        upgrades = [item for item in upgrades if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
+    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor)
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in upgrades
     ]
@@ -837,36 +879,56 @@ def generate_single_reward(floor: int, player: Dict | None = None) -> Dict:
         scale_weapon_stats(reward_item, floor)
     return {"type": reward_type, "item": reward_item}
 
-def apply_reward_item(state: Dict, reward: Dict) -> None:
+def apply_reward_item(state: Dict, reward: Dict) -> bool:
     player = state["player"]
     if reward["type"] == "weapon":
         player["weapon"] = reward["item"]
         _append_log(state, f"Вы берете оружие: <b>{reward['item']['name']}</b>.")
-    elif reward["type"] == "upgrade":
+        return True
+    if reward["type"] == "upgrade":
         upgrade = reward["item"]
         if upgrade["type"] == "stat":
             stat = upgrade["stat"]
             if stat == "luck":
                 if _is_luck_maxed(player):
                     _append_log(state, "Удача уже на максимуме.")
-                    return
+                    return False
                 player["luck"] = _clamp(player.get("luck", 0.0) + upgrade["amount"], 0.0, LUCK_MAX)
                 _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
-                return
+                return True
+            if stat == "ap_max":
+                cap = _ap_max_cap_for_floor(state.get("floor", 1))
+                current = int(player.get("ap_max", 0))
+                if current >= cap:
+                    _append_log(state, "Максимум ОД на этом этаже уже достигнут.")
+                    return False
+                new_value = current + upgrade["amount"]
+                if new_value > cap:
+                    new_value = cap
+                player["ap_max"] = new_value
+                if player.get("ap", 0) > new_value:
+                    player["ap"] = new_value
+                _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
+                return True
             player[stat] = player.get(stat, 0) + upgrade["amount"]
             if stat == "hp_max":
                 player["hp"] = min(player["hp_max"], player["hp"] + upgrade["amount"])
             _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
-        elif upgrade["type"] == "potion":
+            return True
+        if upgrade["type"] == "potion":
             added, dropped = _add_potion(player, upgrade, count=1)
             if added:
                 _append_log(state, f"Получено зелье: <b>{upgrade['name']}</b>.")
             if dropped:
                 _append_log(state, "Нет места для зелий — находка сгорает.")
-    elif reward["type"] == "scroll":
+            return True
+    if reward["type"] == "scroll":
         scroll = reward["item"]
         player.setdefault("scrolls", []).append(scroll)
         _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
+        return True
+    return False
+
 
 def prepare_event(state: Dict) -> None:
     state["phase"] = "event"
@@ -883,7 +945,8 @@ def apply_reward(state: Dict, reward_index: int) -> None:
         return
 
     reward = rewards[reward_index]
-    apply_reward_item(state, reward)
+    if not apply_reward_item(state, reward):
+        return
     next_floor = state.get("floor", 0) + 1
     if is_any_boss_floor(next_floor):
         advance_floor(state)
@@ -939,7 +1002,13 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         player["hp"] += 10
         _append_log(state, "Артефакт крови наполняет вас: <b>+10</b> к макс. HP.")
     elif artifact_id == "artifact_ap":
+        cap = _ap_max_cap_for_floor(state.get("floor", 1))
+        if int(player.get("ap_max", 0)) >= cap:
+            _append_log(state, "Максимум ОД на этом этаже уже достигнут.")
+            return
         player["ap_max"] += 1
+        if player["ap_max"] > cap:
+            player["ap_max"] = cap
         _append_log(state, "Артефакт воли укрепляет дух: <b>+1</b> к макс. ОД.")
     elif artifact_id == "artifact_potions":
         added, dropped = _grant_medium_potion(player, count=2)
@@ -995,6 +1064,7 @@ def advance_floor(state: Dict) -> None:
     state["boss_artifacts"] = []
     state["show_info"] = False
     player = state["player"]
+    _enforce_ap_max_cap(player, state["floor"])
     player["ap"] = player["ap_max"]
     if is_any_boss_floor(state["floor"]):
         player["hp"] = player["hp_max"]
@@ -1034,6 +1104,7 @@ def render_state(state: Dict) -> str:
     lines = [
         f"<b>Этаж:</b> {state['floor']}",
         f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {player['ap']}/{player['ap_max']}",
+        f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
         (
             f"<b>Точность:</b> {_percent(accuracy_value)} | "
             f"<b>Уклонение:</b> {_percent(player['evasion'])} | "
