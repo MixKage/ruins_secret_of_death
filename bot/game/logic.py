@@ -83,6 +83,17 @@ def _apply_burn(enemy: Dict, damage: int) -> None:
     enemy["burn_damage"] = max(enemy.get("burn_damage", 0), damage)
 
 
+
+
+def _potion_stats(player: Dict, potion_id: str) -> Tuple[int, int]:
+    for potion in player.get("potions", []):
+        if potion.get("id") == potion_id:
+            return int(potion.get("heal", 0)), int(potion.get("ap_restore", 0))
+    fallback = get_upgrade_by_id(potion_id)
+    if fallback:
+        return int(fallback.get("heal", 0)), int(fallback.get("ap_restore", 0))
+    return 0, 0
+
 def count_potions(player: Dict, potion_id: str) -> int:
     return sum(1 for potion in player.get("potions", []) if potion.get("id") == potion_id)
 
@@ -1019,9 +1030,15 @@ def render_state(state: Dict) -> str:
         medium_count = count_potions(player, "potion_medium")
         strong_count = count_potions(player, "potion_strong")
         lines.append("<b>Выбор зелья:</b>")
-        lines.append(f"Малое зелье: <b>{small_count}</b>")
-        lines.append(f"Среднее зелье: <b>{medium_count}</b>")
-        lines.append(f"Сильное зелье: <b>{strong_count}</b>")
+        small_heal, small_ap = _potion_stats(player, "potion_small")
+        medium_heal, medium_ap = _potion_stats(player, "potion_medium")
+        strong_heal, strong_ap = _potion_stats(player, "potion_strong")
+        if small_count > 0:
+            lines.append(f"Малое зелье: <b>{small_count}</b> (+{small_heal} HP, +{small_ap} ОД)")
+        if medium_count > 0:
+            lines.append(f"Среднее зелье: <b>{medium_count}</b> (+{medium_heal} HP, +{medium_ap} ОД)")
+        if strong_count > 0:
+            lines.append(f"Сильное зелье: <b>{strong_count}</b> (+{strong_heal} HP, +{strong_ap} ОД)")
         lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
