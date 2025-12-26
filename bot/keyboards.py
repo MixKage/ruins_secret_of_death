@@ -42,6 +42,18 @@ def battle_kb(
     builder.adjust(2)
     return builder.as_markup()
 
+
+
+def potion_kb(has_small: bool, has_medium: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if has_small:
+        builder.button(text="Малое зелье", callback_data="potion:small")
+    if has_medium:
+        builder.button(text="Среднее зелье", callback_data="potion:medium")
+    builder.button(text="Назад", callback_data="potion:back")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for idx, scroll in enumerate(scrolls):

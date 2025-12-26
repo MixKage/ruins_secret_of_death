@@ -10,10 +10,12 @@ from bot.game.logic import (
     apply_treasure_choice,
     build_enemy_info_text,
     build_fallen_boss_intro,
+    count_potions,
     end_turn,
     new_run_state,
     player_attack,
     player_use_potion,
+    player_use_potion_by_id,
     player_use_scroll,
     render_state,
     LATE_BOSS_NAME_FALLBACK,
@@ -23,6 +25,7 @@ from bot.keyboards import (
     boss_artifact_kb,
     event_kb,
     inventory_kb,
+    potion_kb,
     main_menu_kb,
     reward_kb,
     treasure_kb,
@@ -132,6 +135,10 @@ def _markup_for_state(state: dict, is_admin: bool = False):
         return treasure_kb()
     if state["phase"] == "inventory":
         return inventory_kb(state["player"].get("scrolls", []))
+    if state["phase"] == "potion_select":
+        has_small = count_potions(state["player"], "potion_small") > 0
+        has_medium = count_potions(state["player"], "potion_medium") > 0
+        return potion_kb(has_small, has_medium)
     return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
 
@@ -232,6 +239,14 @@ async def battle_action(callback: CallbackQuery) -> None:
         await _send_state(callback, state, run_id)
         return
     elif action == "potion":
+        has_small = count_potions(state["player"], "potion_small") > 0
+        has_medium = count_potions(state["player"], "potion_medium") > 0
+        if has_small and has_medium:
+            state["phase"] = "potion_select"
+            await db.update_run(run_id, state)
+            await callback.answer()
+            await _send_state(callback, state, run_id)
+            return
         player_use_potion(state)
     elif action == "info":
         state["show_info"] = not state.get("show_info", False)
@@ -290,6 +305,49 @@ async def battle_action(callback: CallbackQuery) -> None:
 
 
 
+
+
+@router.callback_query(F.data.startswith("potion:"))
+async def potion_action(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
+        return
+
+    run_id, state = active
+    if state["phase"] != "potion_select":
+        await callback.answer("Сейчас не выбор зелий.", show_alert=True)
+        await _send_state(callback, state, run_id)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    if action == "back":
+        state["phase"] = "battle"
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+
+    potion_id = None
+    if action == "small":
+        potion_id = "potion_small"
+    elif action == "medium":
+        potion_id = "potion_medium"
+
+    if potion_id:
+        state["phase"] = "battle"
+        player_use_potion_by_id(state, potion_id)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+
+    await callback.answer("Неверное действие.", show_alert=True)
 @router.callback_query(F.data.startswith("inventory:"))
 async def inventory_action(callback: CallbackQuery) -> None:
     user_row = await get_user_row(callback)

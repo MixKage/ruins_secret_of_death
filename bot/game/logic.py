@@ -53,7 +53,6 @@ BOSS_INTRO_LINES = [
     "<i>Этот бой решит судьбу руин. Готовьтесь.</i>",
 ]
 
-
 DAUGHTER_INTRO_LINES = [
     "<b>Зал Забытых Костей</b>",
     "Вы ощущаете, как древняя магия стягивает воздух в тугой узел.",
@@ -82,6 +81,10 @@ def _magic_scroll_damage(player: Dict) -> int:
 def _apply_burn(enemy: Dict, damage: int) -> None:
     enemy["burn_turns"] = max(enemy.get("burn_turns", 0), 1)
     enemy["burn_damage"] = max(enemy.get("burn_damage", 0), damage)
+
+
+def count_potions(player: Dict, potion_id: str) -> int:
+    return sum(1 for potion in player.get("potions", []) if potion.get("id") == potion_id)
 
 def _apply_freeze(enemy: Dict) -> None:
     enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
@@ -316,7 +319,6 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     base["min_floor"] = floor
     base["max_floor"] = floor
     return base
-
 
 def build_daughter_boss(player: Dict, floor: int) -> Dict:
     base = build_boss(player)
@@ -607,6 +609,20 @@ def player_use_potion(state: Dict) -> None:
     _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
 
     check_battle_end(state)
+
+def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
+    player = state["player"]
+    potions = player.get("potions", [])
+    for idx, potion in enumerate(potions):
+        if potion.get("id") == potion_id:
+            potion = potions.pop(idx)
+            player["hp"] = min(player["hp_max"], player["hp"] + potion["heal"])
+            player["ap"] = min(player["ap_max"], player["ap"] + potion["ap_restore"])
+            _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
+            check_battle_end(state)
+            return
+    _append_log(state, "Нет подходящего зелья.")
+
 
 def player_use_scroll(state: Dict, scroll_index: int) -> None:
     player = state["player"]
@@ -998,6 +1014,13 @@ def render_state(state: Dict) -> str:
             lines.append("<i>Экипировать находку или оставить?</i>")
         else:
             lines.append("<i>Ничего не найдено.</i>")
+    elif state["phase"] == "potion_select":
+        small_count = count_potions(player, "potion_small")
+        medium_count = count_potions(player, "potion_medium")
+        lines.append("<b>Выбор зелья:</b>")
+        lines.append(f"Малое зелье: <b>{small_count}</b>")
+        lines.append(f"Среднее зелье: <b>{medium_count}</b>")
+        lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
         magic_damage = _magic_scroll_damage(player)
