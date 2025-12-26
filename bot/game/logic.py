@@ -9,6 +9,14 @@ MAX_LOG_LINES = 4
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
 ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
 
+LUCK_MAX = 0.8
+FULL_HEALTH_DAMAGE_BONUS = 0.2
+
+POTION_LIMITS = {
+    "potion_small": 10,
+    "potion_medium": 5,
+    "potion_strong": 2,
+}
 
 BOSS_FLOOR = 10
 LATE_BOSS_FLOOR_STEP = 10
@@ -70,7 +78,10 @@ def _magic_scroll_damage(player: Dict) -> int:
     weapon = player.get("weapon", {})
     max_weapon = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
     dmg = max_weapon * int(player.get("ap_max", 1))
-    return max(20, int(dmg))
+    dmg = max(20, int(dmg))
+    if _has_resolve(player):
+        dmg = int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS)))
+    return dmg
 
 def _apply_burn(enemy: Dict, damage: int) -> None:
     enemy["burn_turns"] = max(enemy.get("burn_turns", 0), 1)
@@ -91,8 +102,42 @@ def _potion_stats(player: Dict, potion_id: str) -> Tuple[int, int]:
 def count_potions(player: Dict, potion_id: str) -> int:
     return sum(1 for potion in player.get("potions", []) if potion.get("id") == potion_id)
 
+
+def _potion_limit(potion_id: str) -> int:
+    return POTION_LIMITS.get(potion_id, 999)
+
+
+def _add_potion(player: Dict, potion: Dict | None, count: int = 1) -> Tuple[int, int]:
+    if not potion or count <= 0:
+        return 0, 0
+    potion_id = potion.get("id")
+    if not potion_id:
+        for _ in range(count):
+            player.setdefault("potions", []).append(copy.deepcopy(potion))
+        return count, 0
+    limit = _potion_limit(potion_id)
+    current = count_potions(player, potion_id)
+    space = max(0, limit - current)
+    to_add = min(space, count)
+    for _ in range(to_add):
+        player.setdefault("potions", []).append(copy.deepcopy(potion))
+    return to_add, count - to_add
+
 def _apply_freeze(enemy: Dict) -> None:
     enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
+
+
+
+def _is_luck_maxed(player: Dict) -> bool:
+    return player.get("luck", 0.0) >= LUCK_MAX
+
+
+def _has_resolve(player: Dict) -> bool:
+    hp_max = int(player.get("hp_max", 0))
+    if hp_max <= 0:
+        return False
+    return player.get("hp", 0) >= hp_max
+
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
     base = ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS if floor > BOSS_FLOOR else ENEMY_DAMAGE_BUDGET_RATIO
@@ -105,17 +150,13 @@ def _is_last_breath(player: Dict, floor: int) -> bool:
     max_hp = max(1, int(player.get("hp_max", 1)))
     return player["hp"] <= max_hp / 3
 
-def _grant_small_potion(player: Dict) -> None:
+def _grant_small_potion(player: Dict) -> Tuple[int, int]:
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
-    if potion:
-        player.setdefault("potions", []).append(potion)
+    return _add_potion(player, potion, count=1)
 
-def _grant_medium_potion(player: Dict, count: int = 1) -> None:
+def _grant_medium_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
     potion = copy.deepcopy(get_upgrade_by_id("potion_medium"))
-    if not potion:
-        return
-    for _ in range(count):
-        player.setdefault("potions", []).append(copy.deepcopy(potion))
+    return _add_potion(player, potion, count=count)
 
 def _mutate_enemy_template(template: Dict) -> Dict:
     mutated = copy.deepcopy(template)
@@ -213,6 +254,14 @@ def _chest_loot_for_floor(floor: int) -> List[Dict]:
         if min_floor <= floor <= max_floor:
             filtered.append(item)
     return filtered
+
+
+
+def _filter_chest_loot_for_player(pool: List[Dict], player: Dict | None) -> List[Dict]:
+    if not player or not _is_luck_maxed(player):
+        return pool
+    return [item for item in pool if not (item.get("type") == "upgrade" and item.get("id") == "lucky_amulet")]
+
 
 def _upgrades_for_floor(floor: int) -> List[Dict]:
     upgrades = _filter_by_floor(UPGRADES, floor)
@@ -348,9 +397,11 @@ def new_run_state() -> Dict:
         "power": 1,
         "luck": 0.2,
         "weapon": weapon,
-        "potions": [potion] if potion else [],
+        "potions": [],
         "scrolls": [ice_scroll] if ice_scroll else [],
     }
+    if potion:
+        _add_potion(player, potion, count=1)
     state = {
         "floor": 1,
         "phase": "battle",
@@ -471,6 +522,8 @@ def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
     base = random.randint(weapon["min_dmg"], weapon["max_dmg"]) + player["power"]
     armor = max(0.0, target["armor"] * (1.0 - weapon["armor_pierce"]))
     dmg = int(max(1, base - armor))
+    if _has_resolve(player):
+        dmg = max(1, int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS))))
     return dmg
 
 def _alive_enemies(enemies: List[Dict]) -> List[Dict]:
@@ -709,14 +762,14 @@ def check_battle_end(state: Dict) -> None:
             boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
             _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
         state["phase"] = "reward"
-        state["rewards"] = generate_rewards(state["floor"])
+        state["rewards"] = generate_rewards(state["floor"], state.get("player"))
         _append_log(state, f"<b>Этаж {state['floor']}</b> зачищен. Выберите награду.")
 
 def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
 
-def _build_chest_reward(floor: int) -> Dict | None:
-    pool = _chest_loot_for_floor(floor)
+def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
+    pool = _filter_chest_loot_for_player(_chest_loot_for_floor(floor), player)
     if not pool:
         return None
     entry = copy.deepcopy(random.choice(pool))
@@ -742,11 +795,14 @@ def _build_chest_reward(floor: int) -> Dict | None:
         return {"type": "scroll", "item": scroll}
     return None
 
-def generate_rewards(floor: int) -> List[Dict]:
+def generate_rewards(floor: int, player: Dict | None = None) -> List[Dict]:
     rewards = []
     used_ids = set()
+    upgrades = _upgrades_for_floor(floor)
+    if player and _is_luck_maxed(player):
+        upgrades = [item for item in upgrades if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
-        ("upgrade", item) for item in _upgrades_for_floor(floor)
+        ("upgrade", item) for item in upgrades
     ]
     while len(rewards) < 3 and pool:
         reward_type, item = random.choice(pool)
@@ -760,9 +816,12 @@ def generate_rewards(floor: int) -> List[Dict]:
         rewards.append({"type": reward_type, "item": reward_item})
     return rewards
 
-def generate_single_reward(floor: int) -> Dict:
+def generate_single_reward(floor: int, player: Dict | None = None) -> Dict:
+    upgrades = _upgrades_for_floor(floor)
+    if player and _is_luck_maxed(player):
+        upgrades = [item for item in upgrades if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
-        ("upgrade", item) for item in _upgrades_for_floor(floor)
+        ("upgrade", item) for item in upgrades
     ]
     reward_type, item = random.choice(pool)
     reward_item = copy.deepcopy(item)
@@ -779,16 +838,23 @@ def apply_reward_item(state: Dict, reward: Dict) -> None:
         upgrade = reward["item"]
         if upgrade["type"] == "stat":
             stat = upgrade["stat"]
+            if stat == "luck":
+                if _is_luck_maxed(player):
+                    _append_log(state, "Удача уже на максимуме.")
+                    return
+                player["luck"] = _clamp(player.get("luck", 0.0) + upgrade["amount"], 0.0, LUCK_MAX)
+                _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
+                return
             player[stat] = player.get(stat, 0) + upgrade["amount"]
             if stat == "hp_max":
                 player["hp"] = min(player["hp_max"], player["hp"] + upgrade["amount"])
             _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
         elif upgrade["type"] == "potion":
-            player.setdefault("potions", []).append(upgrade)
-            _append_log(state, f"Получено зелье: <b>{upgrade['name']}</b>.")
-
-        if upgrade.get("stat") == "luck":
-            player["luck"] = _clamp(player["luck"], 0.0, 0.8)
+            added, dropped = _add_potion(player, upgrade, count=1)
+            if added:
+                _append_log(state, f"Получено зелье: <b>{upgrade['name']}</b>.")
+            if dropped:
+                _append_log(state, "Нет места для зелий — находка сгорает.")
     elif reward["type"] == "scroll":
         scroll = reward["item"]
         player.setdefault("scrolls", []).append(scroll)
@@ -826,9 +892,9 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         state["chests_opened"] = state.get("chests_opened", 0) + 1
         chance = _clamp(player["luck"], 0.05, 0.7)
         if random.random() < chance:
-            reward = _build_chest_reward(state["floor"] + 2)
+            reward = _build_chest_reward(state["floor"] + 2, player)
             if not reward:
-                reward = generate_single_reward(state["floor"] + 2)
+                reward = generate_single_reward(state["floor"] + 2, player)
             _append_log(state, "Сундук раскрывает <b>редкую</b> находку.")
             state["phase"] = "treasure"
             state["treasure_reward"] = reward
@@ -837,15 +903,21 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
             advance = False
         else:
             _append_log(state, "<i>Сундук пуст. Удача отвернулась.</i>")
-        _grant_small_potion(player)
-        _append_log(state, "Вы находите <b>малое зелье</b>.")
+        added, dropped = _grant_small_potion(player)
+        if added:
+            _append_log(state, "Вы находите <b>малое зелье</b>.")
+        if dropped:
+            _append_log(state, "Нет места для зелий — находка сгорает.")
     elif event_id == "campfire":
         bonus = random.randint(2, 3)
         player["hp_max"] += bonus
         player["hp"] += bonus
         _append_log(state, f"Костер укрепляет вас: <b>+{bonus}</b> к макс. HP.")
-        _grant_small_potion(player)
-        _append_log(state, "Вы находите <b>малое зелье</b>.")
+        added, dropped = _grant_small_potion(player)
+        if added:
+            _append_log(state, "Вы находите <b>малое зелье</b>.")
+        if dropped:
+            _append_log(state, "Нет места для зелий — находка сгорает.")
     else:
         _append_log(state, "Неверный выбор комнаты.")
 
@@ -862,8 +934,13 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         player["ap_max"] += 1
         _append_log(state, "Артефакт воли укрепляет дух: <b>+1</b> к макс. ОД.")
     elif artifact_id == "artifact_potions":
-        _grant_medium_potion(player, count=2)
-        _append_log(state, "Алхимический набор дарует <b>2 средних зелья</b>.")
+        added, dropped = _grant_medium_potion(player, count=2)
+        if added == 1:
+            _append_log(state, "Алхимический набор дарует <b>среднее зелье</b>.")
+        elif added > 1:
+            _append_log(state, f"Алхимический набор дарует <b>{added} средних зелья</b>.")
+        if dropped:
+            _append_log(state, "Лишние зелья сгорают.")
     else:
         _append_log(state, "Вы не смогли выбрать артефакт.")
 
@@ -954,8 +1031,13 @@ def render_state(state: Dict) -> str:
         ),
         f"<b>Сила:</b> +{player.get('power', 0)} урона",
     ]
+    status_notes = []
+    if _has_resolve(player):
+        status_notes.append("Решимость — урон +20%")
     if last_breath_active:
-        lines.append("<b>Состояние:</b> <i>На последнем издыхании — точность 100%</i>")
+        status_notes.append("На последнем издыхании — точность 100%")
+    if status_notes:
+        lines.append(f"<b>Состояние:</b> <i>{' / '.join(status_notes)}</i>")
     lines.extend([
         f"<b>Оружие:</b> <b>{weapon['name']}</b> (урон {weapon['min_dmg']}-{weapon['max_dmg']})",
         f"<b>Зелий:</b> {len(player.get('potions', []))} | <b>Свитков:</b> {len(player.get('scrolls', []))}",

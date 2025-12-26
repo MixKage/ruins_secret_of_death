@@ -121,6 +121,12 @@ effective_armor = target.armor * (1 - weapon.armor_pierce)
 damage = max(1, int(base_damage - effective_armor))
 ```
 
+### Решимость (полное здоровье)
+```text
+final_damage *= 1.2
+```
+- Активна, когда HP == hp_max.
+
 ### Сплэш-урон
 ```text
 splash_damage = max(1, int(damage * weapon.splash_ratio))
@@ -184,8 +190,6 @@ chance = clamp(player.luck, 0.05, 0.7)
 
 ### «Последнее издыхание» (точность 100%)
 ```text
-thresholds: 1-3 -> 10 HP, 4-6 -> 13 HP, 7-9 -> 15 HP
-после 9 этажа: +2 HP к порогу каждые 3 этажа
 threshold = player.hp_max / 3
 ```
 
