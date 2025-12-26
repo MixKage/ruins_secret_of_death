@@ -112,7 +112,7 @@ hit_chance = clamp(attacker_accuracy - defender_evasion, 0.15, 0.95)
 ```
 - Для игрока: `attacker_accuracy = player.accuracy + weapon.accuracy_bonus`.
 - Для врага: `attacker_accuracy = enemy.accuracy`.
-- В состоянии «на последнем издыхании» точность игрока = 100%.
+- В состоянии «на последнем издыхании» точность игрока = 100% (HP ≤ 1/3 от максимального).
 
 ### Урон игрока
 ```text
@@ -186,6 +186,7 @@ chance = clamp(player.luck, 0.05, 0.7)
 ```text
 thresholds: 1-3 -> 10 HP, 4-6 -> 13 HP, 7-9 -> 15 HP
 после 9 этажа: +2 HP к порогу каждые 3 этажа
+threshold = player.hp_max / 3
 ```
 
 ### Магические свитки

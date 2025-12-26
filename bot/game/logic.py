@@ -9,12 +9,6 @@ MAX_LOG_LINES = 4
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
 ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
 
-LAST_BREATH_THRESHOLDS = [
-    (3, 10),
-    (6, 13),
-    (9, 15),
-]
-LAST_BREATH_STEP = 2
 
 BOSS_FLOOR = 10
 LATE_BOSS_FLOOR_STEP = 10
@@ -107,15 +101,9 @@ def _enemy_damage_budget_ratio(floor: int) -> float:
         base += 0.1 * steps
     return min(base, 1.0)
 
-def _last_breath_threshold(floor: int) -> int:
-    for max_floor, threshold in LAST_BREATH_THRESHOLDS:
-        if floor <= max_floor:
-            return threshold
-    extra_zones = (floor - 10) // 3 + 1
-    return LAST_BREATH_THRESHOLDS[-1][1] + extra_zones * LAST_BREATH_STEP
-
 def _is_last_breath(player: Dict, floor: int) -> bool:
-    return player["hp"] <= _last_breath_threshold(floor)
+    max_hp = max(1, int(player.get("hp_max", 1)))
+    return player["hp"] <= max_hp / 3
 
 def _grant_small_potion(player: Dict) -> None:
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
