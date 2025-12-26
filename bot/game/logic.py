@@ -19,6 +19,8 @@ LAST_BREATH_STEP = 2
 BOSS_FLOOR = 10
 LATE_BOSS_FLOOR_STEP = 10
 LATE_BOSS_NAME_FALLBACK = "Павший герой"
+ULTIMATE_BOSS_FLOOR_STEP = 100
+DAUGHTER_BOSS_NAME = "Дочь некроманта"
 LATE_BOSS_SCALE_POWER = 0.12
 LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
@@ -49,6 +51,16 @@ BOSS_INTRO_LINES = [
     "В центре круга из соли и костей стоит <b>Некромант</b> — хозяин руин.",
     "Его голос звучит, как хор мертвых, и стены отвечают ему эхом.",
     "<i>Этот бой решит судьбу руин. Готовьтесь.</i>",
+]
+
+
+DAUGHTER_INTRO_LINES = [
+    "<b>Зал Забытых Костей</b>",
+    "Вы ощущаете, как древняя магия стягивает воздух в тугой узел.",
+    "Из тьмы выходит дочь некроманта — та, ради кого он спускался в руины.",
+    "Она давно испила зелье бессмертия, но душа не вернулась — осталась лишь пустая оболочка.",
+    "В её взгляде нет света. Только голод и желание убивать.",
+    "<i>Это не бой — это приговор. Выдержите.</i>",
 ]
 
 def _append_log(state: Dict, message: str) -> None:
@@ -236,11 +248,14 @@ EVENT_OPTIONS = [
 def is_boss_floor(floor: int) -> bool:
     return floor == BOSS_FLOOR
 
+def is_ultimate_boss_floor(floor: int) -> bool:
+    return floor >= ULTIMATE_BOSS_FLOOR_STEP and floor % ULTIMATE_BOSS_FLOOR_STEP == 0
+
 def is_late_boss_floor(floor: int) -> bool:
-    return floor > BOSS_FLOOR and floor % LATE_BOSS_FLOOR_STEP == 0
+    return floor > BOSS_FLOOR and floor % LATE_BOSS_FLOOR_STEP == 0 and not is_ultimate_boss_floor(floor)
 
 def is_any_boss_floor(floor: int) -> bool:
-    return is_boss_floor(floor) or is_late_boss_floor(floor)
+    return is_boss_floor(floor) or is_late_boss_floor(floor) or is_ultimate_boss_floor(floor)
 
 def generate_boss_artifacts() -> List[Dict]:
     return [copy.deepcopy(option) for option in BOSS_ARTIFACT_OPTIONS]
@@ -297,6 +312,21 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     base["accuracy"] = _clamp(base["accuracy"] + steps * LATE_BOSS_SCALE_ACCURACY, 0.6, 0.95)
     base["evasion"] = _clamp(base["evasion"] + steps * LATE_BOSS_SCALE_EVASION, 0.05, 0.3)
     base["info"] = "Павший авантюрист, поднятый темной силой."
+    base["danger"] = "легендарная"
+    base["min_floor"] = floor
+    base["max_floor"] = floor
+    return base
+
+
+def build_daughter_boss(player: Dict, floor: int) -> Dict:
+    base = build_boss(player)
+    hp_value = max(2000, int(player.get("ap_max", 1)) * 100)
+    base["id"] = "necromancer_daughter"
+    base["name"] = DAUGHTER_BOSS_NAME
+    base["hp"] = hp_value
+    base["max_hp"] = hp_value
+    base["attack"] = max(1, int(player.get("hp_max", 1) / 6))
+    base["info"] = "Дочь некроманта, лишенная души и ведомая жаждой убийства."
     base["danger"] = "легендарная"
     base["min_floor"] = floor
     base["max_floor"] = floor
@@ -658,6 +688,8 @@ def check_battle_end(state: Dict) -> None:
             state["boss_defeated"] = True
             _append_log(state, "<b>Некромант пал.</b> Руины на миг затихли.")
             _append_log(state, "Но зелье вечной жизни все еще не найдено — путь продолжается.")
+        elif state.get("boss_kind") == "daughter":
+            _append_log(state, "<b>Дочь некроманта повержена.</b> Но тьма в руинах не рассеивается.")
         elif state.get("boss_kind") == "fallen":
             boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
             _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
@@ -824,7 +856,11 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
     player["ap"] = player["ap_max"]
     state["boss_artifacts"] = []
     boss_kind = state.get("boss_kind")
-    if boss_kind == "fallen":
+    if boss_kind == "daughter":
+        state["enemies"] = [build_daughter_boss(player, state.get("floor", BOSS_FLOOR))]
+        state["phase"] = "battle"
+        _append_log(state, "Дочь некроманта выходит из тени. Битва начинается.")
+    elif boss_kind == "fallen":
         boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
         state["boss_name"] = boss_name
         state["enemies"] = [build_late_boss(player, state.get("floor", BOSS_FLOOR), boss_name)]
@@ -866,6 +902,11 @@ def advance_floor(state: Dict) -> None:
             state["boss_name"] = "Некромант"
             state["boss_intro_lines"] = BOSS_INTRO_LINES
             state["enemies"] = [build_boss(player)]
+        elif is_ultimate_boss_floor(state["floor"]):
+            state["boss_kind"] = "daughter"
+            state["boss_name"] = DAUGHTER_BOSS_NAME
+            state["boss_intro_lines"] = DAUGHTER_INTRO_LINES
+            state["enemies"] = [build_daughter_boss(player, state["floor"])]
         else:
             state["boss_kind"] = "fallen"
             state["boss_name"] = None
