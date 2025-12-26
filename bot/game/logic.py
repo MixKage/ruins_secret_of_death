@@ -1017,9 +1017,11 @@ def render_state(state: Dict) -> str:
     elif state["phase"] == "potion_select":
         small_count = count_potions(player, "potion_small")
         medium_count = count_potions(player, "potion_medium")
+        strong_count = count_potions(player, "potion_strong")
         lines.append("<b>Выбор зелья:</b>")
         lines.append(f"Малое зелье: <b>{small_count}</b>")
         lines.append(f"Среднее зелье: <b>{medium_count}</b>")
+        lines.append(f"Сильное зелье: <b>{strong_count}</b>")
         lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")

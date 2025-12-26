@@ -136,9 +136,10 @@ def _markup_for_state(state: dict, is_admin: bool = False):
     if state["phase"] == "inventory":
         return inventory_kb(state["player"].get("scrolls", []))
     if state["phase"] == "potion_select":
-        has_small = count_potions(state["player"], "potion_small") > 0
-        has_medium = count_potions(state["player"], "potion_medium") > 0
-        return potion_kb(has_small, has_medium)
+        small_count = count_potions(state["player"], "potion_small")
+        medium_count = count_potions(state["player"], "potion_medium")
+        strong_count = count_potions(state["player"], "potion_strong")
+        return potion_kb(small_count, medium_count, strong_count)
     return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
 
@@ -239,15 +240,18 @@ async def battle_action(callback: CallbackQuery) -> None:
         await _send_state(callback, state, run_id)
         return
     elif action == "potion":
-        has_small = count_potions(state["player"], "potion_small") > 0
-        has_medium = count_potions(state["player"], "potion_medium") > 0
-        if has_small and has_medium:
+        potions = state["player"].get("potions", [])
+        potion_types = {potion.get("id") for potion in potions if potion.get("id")}
+        if len(potion_types) > 1:
             state["phase"] = "potion_select"
             await db.update_run(run_id, state)
             await callback.answer()
             await _send_state(callback, state, run_id)
             return
-        player_use_potion(state)
+        if potion_types:
+            player_use_potion_by_id(state, next(iter(potion_types)))
+        else:
+            player_use_potion(state)
     elif action == "info":
         state["show_info"] = not state.get("show_info", False)
         await db.update_run(run_id, state)
@@ -338,6 +342,8 @@ async def potion_action(callback: CallbackQuery) -> None:
         potion_id = "potion_small"
     elif action == "medium":
         potion_id = "potion_medium"
+    elif action == "strong":
+        potion_id = "potion_strong"
 
     if potion_id:
         state["phase"] = "battle"

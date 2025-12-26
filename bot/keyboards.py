@@ -44,12 +44,14 @@ def battle_kb(
 
 
 
-def potion_kb(has_small: bool, has_medium: bool) -> InlineKeyboardMarkup:
+def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if has_small:
-        builder.button(text="Малое зелье", callback_data="potion:small")
-    if has_medium:
-        builder.button(text="Среднее зелье", callback_data="potion:medium")
+    if small_count > 0:
+        builder.button(text=f"Малое ({small_count})", callback_data="potion:small")
+    if medium_count > 0:
+        builder.button(text=f"Среднее ({medium_count})", callback_data="potion:medium")
+    if strong_count > 0:
+        builder.button(text=f"Сильное ({strong_count})", callback_data="potion:strong")
     builder.button(text="Назад", callback_data="potion:back")
     builder.adjust(1)
     return builder.as_markup()

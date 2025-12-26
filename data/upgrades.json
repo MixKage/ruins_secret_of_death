@@ -69,11 +69,11 @@
     "heal": 8,
     "ap_restore": 1,
     "min_floor": 1,
-    "max_floor": 999
+    "max_floor": 20
   },
   {
-    "id": "potion_strong",
-    "name": "Сильное зелье (лечит 14 HP и +2 ОД)",
+    "id": "potion_medium",
+    "name": "Среднее зелье (лечит 14 HP и +2 ОД)",
     "type": "potion",
     "heal": 14,
     "ap_restore": 2,
@@ -81,12 +81,12 @@
     "max_floor": 999
   },
   {
-    "id": "potion_medium",
-    "name": "Среднее зелье (лечит 11 HP и +1 ОД)",
+    "id": "potion_strong",
+    "name": "Сильное зелье (лечит 24 HP и +3 ОД)",
     "type": "potion",
-    "heal": 11,
-    "ap_restore": 1,
-    "min_floor": 10,
+    "heal": 24,
+    "ap_restore": 3,
+    "min_floor": 25,
     "max_floor": 999
   }
 ]
