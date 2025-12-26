@@ -4,7 +4,6 @@ from typing import Dict, List, Tuple
 
 from .data import CHEST_LOOT, ENEMIES, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
 
-
 MAX_LOG_LINES = 4
 
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
@@ -52,19 +51,15 @@ BOSS_INTRO_LINES = [
     "<i>Этот бой решит судьбу руин. Готовьтесь.</i>",
 ]
 
-
 def _append_log(state: Dict, message: str) -> None:
     state.setdefault("log", []).append(message)
     state["log"] = state["log"][-MAX_LOG_LINES:]
 
-
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
-
 def _percent(value: float) -> str:
     return f"{int(round(value * 100))}%"
-
 
 def _magic_scroll_damage(player: Dict) -> int:
     weapon = player.get("weapon", {})
@@ -72,15 +67,12 @@ def _magic_scroll_damage(player: Dict) -> int:
     dmg = max_weapon * int(player.get("ap_max", 1))
     return max(20, int(dmg))
 
-
 def _apply_burn(enemy: Dict, damage: int) -> None:
     enemy["burn_turns"] = max(enemy.get("burn_turns", 0), 1)
     enemy["burn_damage"] = max(enemy.get("burn_damage", 0), damage)
 
-
 def _apply_freeze(enemy: Dict) -> None:
     enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
-
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
     base = ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS if floor > BOSS_FLOOR else ENEMY_DAMAGE_BUDGET_RATIO
@@ -89,7 +81,6 @@ def _enemy_damage_budget_ratio(floor: int) -> float:
         base += 0.1 * steps
     return min(base, 1.0)
 
-
 def _last_breath_threshold(floor: int) -> int:
     for max_floor, threshold in LAST_BREATH_THRESHOLDS:
         if floor <= max_floor:
@@ -97,16 +88,13 @@ def _last_breath_threshold(floor: int) -> int:
     extra_zones = (floor - 10) // 3 + 1
     return LAST_BREATH_THRESHOLDS[-1][1] + extra_zones * LAST_BREATH_STEP
 
-
 def _is_last_breath(player: Dict, floor: int) -> bool:
     return player["hp"] <= _last_breath_threshold(floor)
-
 
 def _grant_small_potion(player: Dict) -> None:
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
     if potion:
         player.setdefault("potions", []).append(potion)
-
 
 def _grant_medium_potion(player: Dict, count: int = 1) -> None:
     potion = copy.deepcopy(get_upgrade_by_id("potion_medium"))
@@ -114,7 +102,6 @@ def _grant_medium_potion(player: Dict, count: int = 1) -> None:
         return
     for _ in range(count):
         player.setdefault("potions", []).append(copy.deepcopy(potion))
-
 
 def _mutate_enemy_template(template: Dict) -> Dict:
     mutated = copy.deepcopy(template)
@@ -138,21 +125,49 @@ def _mutate_enemy_template(template: Dict) -> Dict:
         mutated["info"] = "Мутировал в глубине руин."
     return mutated
 
+WEAPON_RARITY_TIERS = [
+    (11, "Редкий"),
+    (20, "Эпический"),
+    (30, "Легендарный"),
+    (40, "Мифический"),
+    (50, "Древний"),
+    (60, "Реликтовый"),
+    (70, "Божественный"),
+    (80, "Вечный"),
+    (90, "Абсолютный"),
+    (100, "Апокрифический"),
+]
 
-def _legendary_weapon(weapon: Dict) -> Dict:
-    legendary = copy.deepcopy(weapon)
-    name = legendary.get("name", "")
-    if not name.startswith("Легендарный "):
-        legendary["name"] = f"Легендарный {name}"
-    legendary["min_dmg"] = legendary.get("min_dmg", 0) + 2
-    legendary["max_dmg"] = legendary.get("max_dmg", 0) + 3
-    legendary["accuracy_bonus"] = _clamp(legendary.get("accuracy_bonus", 0.0) + 0.05, -0.2, 0.3)
-    legendary["splash_ratio"] = _clamp(legendary.get("splash_ratio", 0.0) + 0.05, 0.0, 0.5)
-    legendary["bleed_chance"] = _clamp(legendary.get("bleed_chance", 0.0) + 0.05, 0.0, 0.6)
-    legendary["bleed_damage"] = legendary.get("bleed_damage", 0) + (1 if legendary.get("bleed_chance", 0) > 0 else 0)
-    legendary["armor_pierce"] = _clamp(legendary.get("armor_pierce", 0.0) + 0.05, 0.0, 0.6)
-    return legendary
+def _weapon_rarity_prefix(floor: int) -> str | None:
+    prefix = None
+    for min_floor, name in WEAPON_RARITY_TIERS:
+        if floor >= min_floor:
+            prefix = name
+    return prefix
 
+def _strip_rarity_prefix(name: str) -> str:
+    for _, prefix in WEAPON_RARITY_TIERS:
+        tag = f"{prefix} "
+        if name.startswith(tag):
+            return name[len(tag):]
+    return name
+
+def _enhanced_weapon(weapon: Dict, floor: int) -> Dict:
+    enhanced = copy.deepcopy(weapon)
+    if floor <= BOSS_FLOOR:
+        return enhanced
+    enhanced["min_dmg"] = enhanced.get("min_dmg", 0) + 2
+    enhanced["max_dmg"] = enhanced.get("max_dmg", 0) + 3
+    enhanced["accuracy_bonus"] = _clamp(enhanced.get("accuracy_bonus", 0.0) + 0.05, -0.2, 0.3)
+    enhanced["splash_ratio"] = _clamp(enhanced.get("splash_ratio", 0.0) + 0.05, 0.0, 0.5)
+    enhanced["bleed_chance"] = _clamp(enhanced.get("bleed_chance", 0.0) + 0.05, 0.0, 0.6)
+    enhanced["bleed_damage"] = enhanced.get("bleed_damage", 0) + (1 if enhanced.get("bleed_chance", 0) > 0 else 0)
+    enhanced["armor_pierce"] = _clamp(enhanced.get("armor_pierce", 0.0) + 0.05, 0.0, 0.6)
+    prefix = _weapon_rarity_prefix(floor)
+    if prefix:
+        base_name = _strip_rarity_prefix(enhanced.get("name", ""))
+        enhanced["name"] = f"{prefix} {base_name}".strip()
+    return enhanced
 
 def _filter_by_floor(items: List[Dict], floor: int) -> List[Dict]:
     filtered = []
@@ -163,13 +178,11 @@ def _filter_by_floor(items: List[Dict], floor: int) -> List[Dict]:
             filtered.append(item)
     return filtered
 
-
 def _weapons_for_floor(floor: int) -> List[Dict]:
     if floor > BOSS_FLOOR:
-        return [_legendary_weapon(item) for item in WEAPONS]
+        return [_enhanced_weapon(item, floor) for item in WEAPONS]
     weapons = _filter_by_floor(WEAPONS, floor)
     return weapons or WEAPONS
-
 
 def _enemies_for_floor(floor: int) -> List[Dict]:
     if floor > BOSS_FLOOR:
@@ -177,7 +190,6 @@ def _enemies_for_floor(floor: int) -> List[Dict]:
         return [_mutate_enemy_template(item) for item in base_pool]
     enemies = _filter_by_floor(ENEMIES, floor)
     return enemies or ENEMIES
-
 
 def _chest_loot_for_floor(floor: int) -> List[Dict]:
     filtered = []
@@ -188,11 +200,9 @@ def _chest_loot_for_floor(floor: int) -> List[Dict]:
             filtered.append(item)
     return filtered
 
-
 def _upgrades_for_floor(floor: int) -> List[Dict]:
     upgrades = _filter_by_floor(UPGRADES, floor)
     return upgrades or UPGRADES
-
 
 def scale_weapon_stats(weapon: Dict, floor: int) -> None:
     current_level = weapon.get("level", 1)
@@ -204,7 +214,6 @@ def scale_weapon_stats(weapon: Dict, floor: int) -> None:
     if weapon.get("bleed_damage"):
         weapon["bleed_damage"] += increase // 2
     weapon["level"] = floor
-
 
 EVENT_OPTIONS = [
     {
@@ -224,22 +233,17 @@ EVENT_OPTIONS = [
     },
 ]
 
-
 def is_boss_floor(floor: int) -> bool:
     return floor == BOSS_FLOOR
-
 
 def is_late_boss_floor(floor: int) -> bool:
     return floor > BOSS_FLOOR and floor % LATE_BOSS_FLOOR_STEP == 0
 
-
 def is_any_boss_floor(floor: int) -> bool:
     return is_boss_floor(floor) or is_late_boss_floor(floor)
 
-
 def generate_boss_artifacts() -> List[Dict]:
     return [copy.deepcopy(option) for option in BOSS_ARTIFACT_OPTIONS]
-
 
 def build_boss(player: Dict) -> Dict:
     ap_max = int(player.get("ap_max", 2))
@@ -275,12 +279,11 @@ def build_boss(player: Dict) -> Dict:
         "max_floor": BOSS_FLOOR,
     }
 
-
-
 def build_fallen_boss_intro(boss_name: str) -> List[str]:
     return [
         f"Когда-то павший в этих руинах герой <b>{boss_name}</b> был поднят темной силой и идет в атаку на вас!",
     ]
+
 def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     steps = max(1, (floor - BOSS_FLOOR) // LATE_BOSS_FLOOR_STEP)
     scale_bonus = 1.0 + steps * LATE_BOSS_SCALE_POWER
@@ -298,8 +301,6 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     base["min_floor"] = floor
     base["max_floor"] = floor
     return base
-
-
 
 def new_run_state() -> Dict:
     weapon = copy.deepcopy(random.choice(_weapons_for_floor(1)))
@@ -341,14 +342,12 @@ def new_run_state() -> Dict:
     _append_log(state, f"Вы нашли <b>{weapon['name']}</b> и спускаетесь на этаж <b>1</b>.")
     return state
 
-
 def _max_group_size_for_floor(floor: int) -> int:
     if floor <= 3:
         return 1
     if floor <= 6:
         return 2
     return 3
-
 
 def generate_enemy_group(floor: int, player_hp_max: int, player_ap_max: int) -> List[Dict]:
     enemies = _enemies_for_floor(floor)
@@ -379,7 +378,6 @@ def generate_enemy_group(floor: int, player_hp_max: int, player_ap_max: int) -> 
     _scale_group_attack_to_budget(group, budget)
     return group
 
-
 def build_enemy(template: Dict, floor: int) -> Dict:
     max_hp = int(template["base_hp"] + template["hp_per_floor"] * floor)
     attack = template["base_attack"] + template["attack_per_floor"] * floor
@@ -407,7 +405,6 @@ def build_enemy(template: Dict, floor: int) -> Dict:
         "max_floor": template.get("max_floor", 999),
     }
 
-
 def _scale_group_attack_to_budget(enemies: List[Dict], budget: float) -> None:
     total_attack = sum(enemy["attack"] for enemy in enemies)
     if total_attack <= 0 or total_attack <= budget:
@@ -429,18 +426,15 @@ def _scale_group_attack_to_budget(enemies: List[Dict], budget: float) -> None:
         enemy["attack"] -= delta
         overflow -= delta
 
-
 def _enemy_group_within_budget(enemies: List[Dict], budget: float) -> bool:
     if not enemies:
         return True
     total_attack = sum(enemy["attack"] for enemy in enemies)
     return total_attack <= budget
 
-
 def roll_hit(attacker_accuracy: float, defender_evasion: float) -> bool:
     chance = _clamp(attacker_accuracy - defender_evasion, 0.15, 0.95)
     return random.random() < chance
-
 
 def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
     base = random.randint(weapon["min_dmg"], weapon["max_dmg"]) + player["power"]
@@ -448,10 +442,8 @@ def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
     dmg = int(max(1, base - armor))
     return dmg
 
-
 def _alive_enemies(enemies: List[Dict]) -> List[Dict]:
     return [enemy for enemy in enemies if enemy["hp"] > 0]
-
 
 def _tally_kills(state: Dict) -> None:
     kills = state.setdefault("kills", {})
@@ -461,13 +453,11 @@ def _tally_kills(state: Dict) -> None:
             enemy_id = enemy.get("id", "unknown")
             kills[enemy_id] = kills.get(enemy_id, 0) + 1
 
-
 def _first_alive(enemies: List[Dict]) -> Dict:
     for enemy in enemies:
         if enemy["hp"] > 0:
             return enemy
     return None
-
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
     if max_floor >= 999:
@@ -475,7 +465,6 @@ def _floor_range_label(min_floor: int, max_floor: int) -> str:
     if min_floor == max_floor:
         return f"{min_floor}"
     return f"{min_floor}-{max_floor}"
-
 
 def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor: int | None = None) -> str:
     if not enemies:
@@ -530,7 +519,6 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
         )
     return "\n".join(lines)
 
-
 def end_turn(state: Dict) -> None:
     if state["phase"] != "battle":
         return
@@ -539,7 +527,6 @@ def end_turn(state: Dict) -> None:
     enemy_phase(state)
     _tally_kills(state)
     check_battle_end(state)
-
 
 def player_attack(state: Dict) -> None:
     player = state["player"]
@@ -578,7 +565,6 @@ def player_attack(state: Dict) -> None:
 
     check_battle_end(state)
 
-
 def player_use_potion(state: Dict) -> None:
     player = state["player"]
     if not player["potions"]:
@@ -591,7 +577,6 @@ def player_use_potion(state: Dict) -> None:
     _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
 
     check_battle_end(state)
-
 
 def player_use_scroll(state: Dict, scroll_index: int) -> None:
     player = state["player"]
@@ -627,7 +612,6 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и горит.")
 
     check_battle_end(state)
-
 
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
@@ -665,7 +649,6 @@ def enemy_phase(state: Dict) -> None:
             _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
             return
 
-
 def check_battle_end(state: Dict) -> None:
     if state["phase"] == "dead":
         return
@@ -682,10 +665,8 @@ def check_battle_end(state: Dict) -> None:
         state["rewards"] = generate_rewards(state["floor"])
         _append_log(state, f"<b>Этаж {state['floor']}</b> зачищен. Выберите награду.")
 
-
 def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
-
 
 def _build_chest_reward(floor: int) -> Dict | None:
     pool = _chest_loot_for_floor(floor)
@@ -698,6 +679,8 @@ def _build_chest_reward(floor: int) -> Dict | None:
         weapon = copy.deepcopy(get_weapon_by_id(item_id))
         if not weapon:
             return None
+        if floor > BOSS_FLOOR:
+            weapon = _enhanced_weapon(weapon, floor)
         scale_weapon_stats(weapon, floor)
         return {"type": "weapon", "item": weapon}
     if item_type == "upgrade":
@@ -711,7 +694,6 @@ def _build_chest_reward(floor: int) -> Dict | None:
             return None
         return {"type": "scroll", "item": scroll}
     return None
-
 
 def generate_rewards(floor: int) -> List[Dict]:
     rewards = []
@@ -731,7 +713,6 @@ def generate_rewards(floor: int) -> List[Dict]:
         rewards.append({"type": reward_type, "item": reward_item})
     return rewards
 
-
 def generate_single_reward(floor: int) -> Dict:
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in _upgrades_for_floor(floor)
@@ -741,7 +722,6 @@ def generate_single_reward(floor: int) -> Dict:
     if reward_type == "weapon":
         scale_weapon_stats(reward_item, floor)
     return {"type": reward_type, "item": reward_item}
-
 
 def apply_reward_item(state: Dict, reward: Dict) -> None:
     player = state["player"]
@@ -767,7 +747,6 @@ def apply_reward_item(state: Dict, reward: Dict) -> None:
         player.setdefault("scrolls", []).append(scroll)
         _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
 
-
 def prepare_event(state: Dict) -> None:
     state["phase"] = "event"
     state["event_options"] = generate_event_options()
@@ -775,7 +754,6 @@ def prepare_event(state: Dict) -> None:
     state["boss_artifacts"] = []
     state["show_info"] = False
     _append_log(state, "Между этажами вы находите <b>развилку</b>.")
-
 
 def apply_reward(state: Dict, reward_index: int) -> None:
     rewards = state.get("rewards", [])
@@ -790,7 +768,6 @@ def apply_reward(state: Dict, reward_index: int) -> None:
         advance_floor(state)
     else:
         prepare_event(state)
-
 
 def apply_event_choice(state: Dict, event_id: str) -> None:
     player = state["player"]
@@ -828,7 +805,6 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
     if advance:
         advance_floor(state)
 
-
 def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
     player = state["player"]
     if artifact_id == "artifact_hp":
@@ -859,7 +835,6 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         state["phase"] = "battle"
         _append_log(state, "Вы распахиваете двери. Некромант поднимает посох.")
 
-
 def apply_treasure_choice(state: Dict, equip: bool) -> None:
     reward = state.get("treasure_reward")
     if not reward:
@@ -872,7 +847,6 @@ def apply_treasure_choice(state: Dict, equip: bool) -> None:
         _append_log(state, "Вы оставляете находку в сундуке.")
     state["treasure_reward"] = None
     advance_floor(state)
-
 
 def advance_floor(state: Dict) -> None:
     state["floor"] += 1
@@ -904,7 +878,6 @@ def advance_floor(state: Dict) -> None:
     state["phase"] = "battle"
     state["enemies"] = generate_enemy_group(state["floor"], player["hp_max"], player["ap_max"])
     _append_log(state, f"Вы спускаетесь на этаж <b>{state['floor']}</b>.")
-
 
 def render_state(state: Dict) -> str:
     player = state["player"]
@@ -1007,7 +980,6 @@ def render_state(state: Dict) -> str:
         lines.extend(state["log"])
 
     return "\n".join(lines)
-
 
 def _format_reward_details(reward_type: str, item: Dict) -> str:
     if reward_type == "weapon":
