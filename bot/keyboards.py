@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def main_menu_kb(has_active_run: bool = False) -> InlineKeyboardMarkup:
+def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if has_active_run:
         builder.button(text="Продолжить забег", callback_data="menu:continue")
@@ -14,9 +14,10 @@ def main_menu_kb(has_active_run: bool = False) -> InlineKeyboardMarkup:
     builder.button(text="Статистика", callback_data="menu:stats")
     if not has_active_run:
         builder.button(text="Поделиться", callback_data="menu:share")
+    if is_admin:
+        builder.button(text="Админ панель", callback_data="menu:admin")
     builder.adjust(1)
     return builder.as_markup()
-
 
 def battle_kb(
     has_potion: bool,
@@ -41,9 +42,6 @@ def battle_kb(
     builder.adjust(2)
     return builder.as_markup()
 
-
-
-
 def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for idx, scroll in enumerate(scrolls):
@@ -52,14 +50,12 @@ def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-
 def reward_kb(reward_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for idx in range(reward_count):
         builder.button(text=f"{idx + 1}", callback_data=f"reward:{idx}")
     builder.adjust(reward_count)
     return builder.as_markup()
-
 
 def treasure_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -68,7 +64,6 @@ def treasure_kb() -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
-
 def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for option in options:
@@ -76,6 +71,12 @@ def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+def admin_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Обновить", callback_data="menu:admin:refresh")
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(2)
+    return builder.as_markup()
 
 def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -84,7 +85,6 @@ def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
     builder.button(text="->", callback_data=f"menu:leaderboard:page:{page + 1}")
     builder.adjust(3)
     return builder.as_markup()
-
 
 def event_kb(options: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

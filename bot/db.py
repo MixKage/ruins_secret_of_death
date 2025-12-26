@@ -41,6 +41,14 @@ async def init_db() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS user_broadcasts (
+                user_id INTEGER NOT NULL,
+                broadcast_key TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, broadcast_key),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
             """
         )
         await db.commit()
@@ -249,3 +257,138 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
             ),
         )
         await db.commit()
+
+async def get_broadcast_targets(broadcast_key: str) -> List[Tuple[int, int]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, telegram_id FROM users WHERE id NOT IN ("
+            "SELECT user_id FROM user_broadcasts WHERE broadcast_key = ?)",
+            (broadcast_key,),
+        )
+        return await cursor.fetchall()
+
+
+async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO user_broadcasts (user_id, broadcast_key) VALUES (?, ?)",
+            (user_id, broadcast_key),
+        )
+        await db.commit()
+
+
+async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, object]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        total_users = int(row[0]) if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM runs WHERE is_active = 1")
+        row = await cursor.fetchone()
+        active_runs = int(row[0]) if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM runs")
+        row = await cursor.fetchone()
+        total_runs = int(row[0]) if row else 0
+
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(deaths), 0), COALESCE(SUM(treasures_found), 0), "
+            "COALESCE(SUM(chests_opened), 0) FROM user_stats"
+        )
+        row = await cursor.fetchone()
+        total_deaths = int(row[0]) if row else 0
+        total_treasures = int(row[1]) if row else 0
+        total_chests = int(row[2]) if row else 0
+
+        cursor = await db.execute("SELECT COALESCE(MAX(max_floor), 0) FROM users")
+        row = await cursor.fetchone()
+        max_floor = int(row[0]) if row else 0
+
+        cursor = await db.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM runs "
+            "WHERE started_at >= datetime('now', '-1 day')"
+        )
+        row = await cursor.fetchone()
+        runs_24h = int(row[0]) if row else 0
+        users_24h = int(row[1]) if row else 0
+
+        cursor = await db.execute("SELECT deaths_by_floor FROM user_stats")
+        rows = await cursor.fetchall()
+        weighted_sum = 0
+        death_total = 0
+        for (deaths_by_floor,) in rows:
+            data = json.loads(deaths_by_floor or "{}")
+            for floor_str, count in data.items():
+                try:
+                    floor = int(floor_str)
+                except (TypeError, ValueError):
+                    continue
+                count_int = int(count)
+                weighted_sum += floor * count_int
+                death_total += count_int
+        avg_death_floor = (weighted_sum / death_total) if death_total else 0.0
+
+        cursor = await db.execute("SELECT user_id, kills_json FROM user_stats")
+        rows = await cursor.fetchall()
+        kill_totals = []
+        user_ids = []
+        for user_id, kills_json in rows:
+            kills = json.loads(kills_json or "{}")
+            total_kills = sum(int(value) for value in kills.values())
+            if total_kills > 0:
+                kill_totals.append((user_id, total_kills))
+                user_ids.append(user_id)
+
+        username_map = {}
+        if user_ids:
+            placeholders = ",".join("?" for _ in user_ids)
+            cursor = await db.execute(
+                f"SELECT id, username FROM users WHERE id IN ({placeholders})",
+                tuple(user_ids),
+            )
+            for user_id, username in await cursor.fetchall():
+                username_map[user_id] = username
+
+        top_killers = sorted(kill_totals, key=lambda item: item[1], reverse=True)[:3]
+        top_killers = [
+            (username_map.get(user_id) or "Без имени", total)
+            for user_id, total in top_killers
+        ]
+
+        broadcast_sent = 0
+        if broadcast_key:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM user_broadcasts WHERE broadcast_key = ?",
+                (broadcast_key,),
+            )
+            row = await cursor.fetchone()
+            broadcast_sent = int(row[0]) if row else 0
+        broadcast_pending = max(0, total_users - broadcast_sent)
+
+        return {
+            "total_users": total_users,
+            "active_runs": active_runs,
+            "total_runs": total_runs,
+            "total_deaths": total_deaths,
+            "total_treasures": total_treasures,
+            "total_chests": total_chests,
+            "max_floor": max_floor,
+            "runs_24h": runs_24h,
+            "users_24h": users_24h,
+            "avg_death_floor": avg_death_floor,
+            "top_killers": top_killers,
+            "broadcast_sent": broadcast_sent,
+            "broadcast_pending": broadcast_pending,
+        }
+
+async def get_random_boss_name(min_floor: int = 10) -> Optional[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT username FROM users "
+            "WHERE username IS NOT NULL AND TRIM(username) != '' AND max_floor >= ? "
+            "ORDER BY RANDOM() LIMIT 1",
+            (min_floor,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+

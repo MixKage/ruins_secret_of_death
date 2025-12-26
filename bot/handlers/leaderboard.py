@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from bot import db
+from bot.handlers.helpers import is_admin_user
 from bot.keyboards import leaderboard_kb, main_menu_kb
 from bot.utils.telegram import edit_or_send
 
@@ -69,7 +70,8 @@ async def leaderboard_menu_callback(callback: CallbackQuery) -> None:
         if user_row:
             has_active = bool(await db.get_active_run(user_row[0]))
     await callback.answer()
-    await edit_or_send(callback, "Главное меню", reply_markup=main_menu_kb(has_active_run=has_active))
+    is_admin = is_admin_user(callback.from_user)
+    await edit_or_send(callback, "Главное меню", reply_markup=main_menu_kb(has_active_run=has_active, is_admin=is_admin))
 
 
 @router.message(Command("leaderboard"))
@@ -78,4 +80,5 @@ async def leaderboard_command(message: Message) -> None:
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     rows = await db.get_leaderboard_page(PAGE_SIZE, 0)
     text = _format_leaderboard(rows, 1, total_pages)
-    await message.answer(text, reply_markup=main_menu_kb())
+    is_admin = is_admin_user(message.from_user)
+    await message.answer(text, reply_markup=main_menu_kb(is_admin=is_admin))

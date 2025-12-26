@@ -9,12 +9,14 @@ from bot.game.logic import (
     apply_boss_artifact_choice,
     apply_treasure_choice,
     build_enemy_info_text,
+    build_fallen_boss_intro,
     end_turn,
     new_run_state,
     player_attack,
     player_use_potion,
     player_use_scroll,
     render_state,
+    LATE_BOSS_NAME_FALLBACK,
 )
 from bot.keyboards import (
     battle_kb,
@@ -25,10 +27,35 @@ from bot.keyboards import (
     reward_kb,
     treasure_kb,
 )
-from bot.handlers.helpers import get_user_row
+from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
+
+async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
+    is_admin = is_admin_user(callback.from_user)
+    if callback.message:
+        await safe_edit_text(callback.message, text, reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin))
+    elif callback.from_user:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            text,
+            reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin),
+        )
+
+
+
+async def _ensure_fallen_boss_details(run_id: int, state: dict) -> None:
+    if state.get("phase") != "boss_prep" or state.get("boss_kind") != "fallen":
+        return
+    if state.get("boss_name") and state.get("boss_intro_lines"):
+        return
+    boss_name = await db.get_random_boss_name(min_floor=10)
+    if not boss_name:
+        boss_name = LATE_BOSS_NAME_FALLBACK
+    state["boss_name"] = boss_name
+    state["boss_intro_lines"] = build_fallen_boss_intro(boss_name)
+    await db.update_run(run_id, state)
 
 
 def _format_run_summary(state: dict, rank: int | None) -> str:
@@ -83,13 +110,16 @@ def _battle_markup(state: dict):
     )
 
 
-async def _send_state(callback: CallbackQuery, state: dict) -> None:
+async def _send_state(callback: CallbackQuery, state: dict, run_id: int | None = None) -> None:
+    if run_id is not None:
+        await _ensure_fallen_boss_details(run_id, state)
     text = render_state(state)
-    markup = _markup_for_state(state)
+    is_admin = is_admin_user(callback.from_user)
+    markup = _markup_for_state(state, is_admin=is_admin)
     await edit_or_send(callback, text, reply_markup=markup)
 
 
-def _markup_for_state(state: dict):
+def _markup_for_state(state: dict, is_admin: bool = False):
     if state["phase"] == "battle":
         return _battle_markup(state)
     if state["phase"] == "reward":
@@ -102,7 +132,7 @@ def _markup_for_state(state: dict):
         return treasure_kb()
     if state["phase"] == "inventory":
         return inventory_kb(state["player"].get("scrolls", []))
-    return main_menu_kb(has_active_run=False)
+    return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
 
 @router.callback_query(F.data == "menu:continue")
@@ -113,13 +143,12 @@ async def continue_run(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
-        if callback.message:
-            await safe_edit_text(callback.message, "Нет активного забега.", reply_markup=main_menu_kb())
+        await _show_main_menu(callback, text="Нет активного забега.")
         return
 
-    _, state = active
+    run_id, state = active
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)
 
 
 @router.callback_query(F.data == "menu:new")
@@ -137,9 +166,9 @@ async def start_new_run(callback: CallbackQuery) -> None:
         await db.record_run_stats(user_id, state, died=False)
 
     state = new_run_state()
-    await db.create_run(user_id, state)
+    run_id = await db.create_run(user_id, state)
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)
 
 
 @router.message(Command("reset"))
@@ -150,10 +179,12 @@ async def reset_handler(message: Message) -> None:
     user_id = await db.ensure_user(user.id, user.username)
     active = await db.get_active_run(user_id)
     if not active:
-        await message.answer("Активного забега нет.", reply_markup=main_menu_kb(has_active_run=False))
+        is_admin = is_admin_user(message.from_user)
+        await message.answer("Активного забега нет.", reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin))
         return
 
-    _, state = active
+    run_id, state = active
+    await _ensure_fallen_boss_details(run_id, state)
     phase_name = {
         "battle": "бой",
         "reward": "награда",
@@ -164,7 +195,8 @@ async def reset_handler(message: Message) -> None:
         "dead": "смерть",
     }.get(state.get("phase"), state.get("phase", "неизвестно"))
     await message.answer(f"<b>Текущая фаза:</b> {phase_name}")
-    await message.answer(render_state(state), reply_markup=_markup_for_state(state))
+    is_admin = is_admin_user(message.from_user)
+    await message.answer(render_state(state), reply_markup=_markup_for_state(state, is_admin=is_admin))
 
 
 @router.callback_query(F.data.startswith("action:"))
@@ -176,11 +208,13 @@ async def battle_action(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "battle":
         await callback.answer("Сейчас не фаза боя.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     action = callback.data.split(":", 1)[1]
@@ -195,7 +229,7 @@ async def battle_action(callback: CallbackQuery) -> None:
         state["phase"] = "inventory"
         await db.update_run(run_id, state)
         await callback.answer()
-        await _send_state(callback, state)
+        await _send_state(callback, state, run_id)
         return
     elif action == "potion":
         player_use_potion(state)
@@ -203,7 +237,7 @@ async def battle_action(callback: CallbackQuery) -> None:
         state["show_info"] = not state.get("show_info", False)
         await db.update_run(run_id, state)
         await callback.answer()
-        await _send_state(callback, state)
+        await _send_state(callback, state, run_id)
         return
     elif action == "endturn":
         if state["player"]["ap"] > 0:
@@ -220,7 +254,7 @@ async def battle_action(callback: CallbackQuery) -> None:
             await safe_edit_text(
                 callback.message,
                 "Вы покинули руины. Забег завершен.",
-                reply_markup=main_menu_kb(has_active_run=False),
+                reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
             )
         return
 
@@ -245,15 +279,14 @@ async def battle_action(callback: CallbackQuery) -> None:
         await callback.bot.send_message(
             callback.from_user.id,
             "Главное меню",
-            reply_markup=main_menu_kb(has_active_run=False),
+            reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
         )
         return
     else:
         await db.update_run(run_id, state)
 
     await callback.answer()
-    await _send_state(callback, state)
-
+    await _send_state(callback, state, run_id)
 
 
 
@@ -266,11 +299,13 @@ async def inventory_action(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "inventory":
         await callback.answer("Сейчас не инвентарь.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     parts = callback.data.split(":")
@@ -279,7 +314,7 @@ async def inventory_action(callback: CallbackQuery) -> None:
         state["phase"] = "battle"
         await db.update_run(run_id, state)
         await callback.answer()
-        await _send_state(callback, state)
+        await _send_state(callback, state, run_id)
         return
     if action == "use" and len(parts) > 2:
         try:
@@ -291,7 +326,7 @@ async def inventory_action(callback: CallbackQuery) -> None:
         player_use_scroll(state, index)
         await db.update_run(run_id, state)
         await callback.answer()
-        await _send_state(callback, state)
+        await _send_state(callback, state, run_id)
         return
 
     await callback.answer("Неверное действие.", show_alert=True)
@@ -304,11 +339,13 @@ async def treasure_choice(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "treasure":
         await callback.answer("Сейчас не время для сундука.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     action = callback.data.split(":", 1)[1]
@@ -317,7 +354,7 @@ async def treasure_choice(callback: CallbackQuery) -> None:
 
     await db.update_run(run_id, state)
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)
 
 
 @router.callback_query(F.data.startswith("boss:"))
@@ -329,11 +366,13 @@ async def boss_artifact_choice(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "boss_prep":
         await callback.answer("Сейчас не время для артефакта.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     artifact_id = callback.data.split(":", 1)[1]
@@ -341,7 +380,7 @@ async def boss_artifact_choice(callback: CallbackQuery) -> None:
 
     await db.update_run(run_id, state)
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)
 
 
 @router.callback_query(F.data.startswith("reward:"))
@@ -353,11 +392,13 @@ async def reward_choice(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "reward":
         await callback.answer("Сейчас не фаза наград.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     reward_index = int(callback.data.split(":", 1)[1])
@@ -365,7 +406,7 @@ async def reward_choice(callback: CallbackQuery) -> None:
 
     await db.update_run(run_id, state)
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)
 
 
 @router.callback_query(F.data.startswith("event:"))
@@ -377,11 +418,13 @@ async def event_choice(callback: CallbackQuery) -> None:
     active = await db.get_active_run(user_row[0])
     if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
         return
 
     run_id, state = active
     if state["phase"] != "event":
         await callback.answer("Сейчас не фаза комнат.", show_alert=True)
+        await _send_state(callback, state, run_id)
         return
 
     event_id = callback.data.split(":", 1)[1]
@@ -396,4 +439,4 @@ async def event_choice(callback: CallbackQuery) -> None:
         await db.update_run(run_id, state)
 
     await callback.answer()
-    await _send_state(callback, state)
+    await _send_state(callback, state, run_id)

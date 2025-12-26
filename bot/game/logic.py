@@ -18,6 +18,12 @@ LAST_BREATH_THRESHOLDS = [
 LAST_BREATH_STEP = 2
 
 BOSS_FLOOR = 10
+LATE_BOSS_FLOOR_STEP = 10
+LATE_BOSS_NAME_FALLBACK = "Павший герой"
+LATE_BOSS_SCALE_POWER = 0.12
+LATE_BOSS_SCALE_ARMOR = 0.05
+LATE_BOSS_SCALE_ACCURACY = 0.02
+LATE_BOSS_SCALE_EVASION = 0.01
 
 BOSS_ARTIFACT_OPTIONS = [
     {
@@ -209,7 +215,7 @@ EVENT_OPTIONS = [
     {
         "id": "treasure_chest",
         "name": "Сундук древних",
-        "effect": "Шанс на награду +2 этажа (зависит от удачи) + малое зелье",
+        "effect": "Шанс на награду +2 этажа или свиток магии + малое зелье",
     },
     {
         "id": "campfire",
@@ -221,6 +227,14 @@ EVENT_OPTIONS = [
 
 def is_boss_floor(floor: int) -> bool:
     return floor == BOSS_FLOOR
+
+
+def is_late_boss_floor(floor: int) -> bool:
+    return floor > BOSS_FLOOR and floor % LATE_BOSS_FLOOR_STEP == 0
+
+
+def is_any_boss_floor(floor: int) -> bool:
+    return is_boss_floor(floor) or is_late_boss_floor(floor)
 
 
 def generate_boss_artifacts() -> List[Dict]:
@@ -262,6 +276,31 @@ def build_boss(player: Dict) -> Dict:
     }
 
 
+
+def build_fallen_boss_intro(boss_name: str) -> List[str]:
+    return [
+        f"Когда-то павший в этих руинах герой <b>{boss_name}</b> был поднят темной силой и идет в атаку на вас!",
+    ]
+def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
+    steps = max(1, (floor - BOSS_FLOOR) // LATE_BOSS_FLOOR_STEP)
+    scale_bonus = 1.0 + steps * LATE_BOSS_SCALE_POWER
+    base = build_boss(player)
+    base["id"] = "fallen_hero"
+    base["name"] = boss_name
+    base["hp"] = int(base["hp"] * scale_bonus)
+    base["max_hp"] = int(base["max_hp"] * scale_bonus)
+    base["attack"] = max(1, int(base["attack"] * scale_bonus))
+    base["armor"] = base["armor"] * (1.0 + steps * LATE_BOSS_SCALE_ARMOR)
+    base["accuracy"] = _clamp(base["accuracy"] + steps * LATE_BOSS_SCALE_ACCURACY, 0.6, 0.95)
+    base["evasion"] = _clamp(base["evasion"] + steps * LATE_BOSS_SCALE_EVASION, 0.05, 0.3)
+    base["info"] = "Павший авантюрист, поднятый темной силой."
+    base["danger"] = "легендарная"
+    base["min_floor"] = floor
+    base["max_floor"] = floor
+    return base
+
+
+
 def new_run_state() -> Dict:
     weapon = copy.deepcopy(random.choice(_weapons_for_floor(1)))
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
@@ -294,6 +333,9 @@ def new_run_state() -> Dict:
         "treasures_found": 0,
         "chests_opened": 0,
         "boss_defeated": False,
+        "boss_kind": None,
+        "boss_name": None,
+        "boss_intro_lines": None,
         "log": [],
     }
     _append_log(state, f"Вы нашли <b>{weapon['name']}</b> и спускаетесь на этаж <b>1</b>.")
@@ -633,6 +675,9 @@ def check_battle_end(state: Dict) -> None:
             state["boss_defeated"] = True
             _append_log(state, "<b>Некромант пал.</b> Руины на миг затихли.")
             _append_log(state, "Но зелье вечной жизни все еще не найдено — путь продолжается.")
+        elif state.get("boss_kind") == "fallen":
+            boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
+            _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
         state["phase"] = "reward"
         state["rewards"] = generate_rewards(state["floor"])
         _append_log(state, f"<b>Этаж {state['floor']}</b> зачищен. Выберите награду.")
@@ -741,7 +786,7 @@ def apply_reward(state: Dict, reward_index: int) -> None:
     reward = rewards[reward_index]
     apply_reward_item(state, reward)
     next_floor = state.get("floor", 0) + 1
-    if is_boss_floor(next_floor):
+    if is_any_boss_floor(next_floor):
         advance_floor(state)
     else:
         prepare_event(state)
@@ -802,9 +847,17 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
     player["hp"] = player["hp_max"]
     player["ap"] = player["ap_max"]
     state["boss_artifacts"] = []
-    state["enemies"] = [build_boss(player)]
-    state["phase"] = "battle"
-    _append_log(state, "Вы распахиваете двери. Некромант поднимает посох.")
+    boss_kind = state.get("boss_kind")
+    if boss_kind == "fallen":
+        boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
+        state["boss_name"] = boss_name
+        state["enemies"] = [build_late_boss(player, state.get("floor", BOSS_FLOOR), boss_name)]
+        state["phase"] = "battle"
+        _append_log(state, f"{boss_name} поднимает оружие. Битва начинается.")
+    else:
+        state["enemies"] = [build_boss(player)]
+        state["phase"] = "battle"
+        _append_log(state, "Вы распахиваете двери. Некромант поднимает посох.")
 
 
 def apply_treasure_choice(state: Dict, equip: bool) -> None:
@@ -830,12 +883,24 @@ def advance_floor(state: Dict) -> None:
     state["show_info"] = False
     player = state["player"]
     player["ap"] = player["ap_max"]
-    if is_boss_floor(state["floor"]):
+    if is_any_boss_floor(state["floor"]):
         player["hp"] = player["hp_max"]
         state["phase"] = "boss_prep"
         state["boss_artifacts"] = generate_boss_artifacts()
-        state["enemies"] = [build_boss(player)]
+        if is_boss_floor(state["floor"]):
+            state["boss_kind"] = "necromancer"
+            state["boss_name"] = "Некромант"
+            state["boss_intro_lines"] = BOSS_INTRO_LINES
+            state["enemies"] = [build_boss(player)]
+        else:
+            state["boss_kind"] = "fallen"
+            state["boss_name"] = None
+            state["boss_intro_lines"] = None
+            state["enemies"] = [build_boss(player)]
         return
+    state["boss_kind"] = None
+    state["boss_name"] = None
+    state["boss_intro_lines"] = None
     state["phase"] = "battle"
     state["enemies"] = generate_enemy_group(state["floor"], player["hp_max"], player["ap_max"])
     _append_log(state, f"Вы спускаетесь на этаж <b>{state['floor']}</b>.")
@@ -890,7 +955,8 @@ def render_state(state: Dict) -> str:
             details = _format_reward_details(reward["type"], item)
             lines.append(f"{idx}. <b>{item['name']}</b> {details}")
     elif state["phase"] == "boss_prep":
-        lines.extend(BOSS_INTRO_LINES)
+        intro_lines = state.get("boss_intro_lines") or BOSS_INTRO_LINES
+        lines.extend(intro_lines)
         lines.append("")
         lines.append("<b>Перед дверью лежат артефакты:</b>")
         for idx, option in enumerate(state.get("boss_artifacts", []), start=1):

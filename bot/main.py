@@ -11,7 +11,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from bot.config import get_bot_token
 from bot.db import init_db
-from bot.handlers import game_router, leaderboard_router, rules_router, share_router, start_router, stats_router
+from bot.handlers import admin_router, broadcast_router, game_router, leaderboard_router, rules_router, share_router, start_router, stats_router
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ async def main() -> None:
         bot = Bot(token=get_bot_token(), default=DefaultBotProperties(parse_mode="HTML"))
         dispatcher = Dispatcher()
         dispatcher.include_router(start_router)
+        dispatcher.include_router(admin_router)
+        dispatcher.include_router(broadcast_router)
         dispatcher.include_router(game_router)
         dispatcher.include_router(leaderboard_router)
         dispatcher.include_router(rules_router)

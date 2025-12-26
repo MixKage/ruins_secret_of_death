@@ -3,7 +3,7 @@ from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.game.data import ENEMIES
-from bot.handlers.helpers import get_user_row
+from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.keyboards import main_menu_kb
 from bot.utils.telegram import edit_or_send
 
@@ -70,4 +70,5 @@ async def stats_callback(callback: CallbackQuery) -> None:
     has_active = bool(await db.get_active_run(user_id))
 
     await callback.answer()
-    await edit_or_send(callback, text, reply_markup=main_menu_kb(has_active_run=has_active))
+    is_admin = is_admin_user(callback.from_user)
+    await edit_or_send(callback, text, reply_markup=main_menu_kb(has_active_run=has_active, is_admin=is_admin))
