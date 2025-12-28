@@ -1304,11 +1304,20 @@ def render_state(state: Dict) -> str:
         medium_heal, medium_ap = _potion_stats(player, "potion_medium")
         strong_heal, strong_ap = _potion_stats(player, "potion_strong")
         if small_count > 0:
-            lines.append(f"Малое зелье: <b>{small_count}</b> (+{small_heal} HP, +{small_ap} ОД)")
+            small_limit = POTION_LIMITS.get("potion_small", small_count)
+            lines.append(
+                f"Малое зелье: <b>{small_count}/{small_limit}</b> (+{small_heal} HP, +{small_ap} ОД)"
+            )
         if medium_count > 0:
-            lines.append(f"Среднее зелье: <b>{medium_count}</b> (+{medium_heal} HP, +{medium_ap} ОД)")
+            medium_limit = POTION_LIMITS.get("potion_medium", medium_count)
+            lines.append(
+                f"Среднее зелье: <b>{medium_count}/{medium_limit}</b> (+{medium_heal} HP, +{medium_ap} ОД)"
+            )
         if strong_count > 0:
-            lines.append(f"Сильное зелье: <b>{strong_count}</b> (+{strong_heal} HP, +{strong_ap} ОД)")
+            strong_limit = POTION_LIMITS.get("potion_strong", strong_count)
+            lines.append(
+                f"Сильное зелье: <b>{strong_count}/{strong_limit}</b> (+{strong_heal} HP, +{strong_ap} ОД)"
+            )
         lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
