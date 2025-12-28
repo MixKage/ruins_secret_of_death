@@ -182,6 +182,7 @@ sum(enemy.attack) <= budget
 - Минимальный размер группы врагов увеличивается на +1 каждые 10 этажей после 20.
 - Правила про минимум по ОД сохраняются (если ОД 3+, минимум 2; если ОД 5+, минимум 3).
 - Каждые 10 этажей после 10 появляется босс павший герой (кроме этажей 100/200/300).
+- Победа над поздним боссом (павший герой) дает 1 сильное зелье лечения.
 - На этажах 100/200/300 и далее появляется босс «Дочь некроманта».
 
 
@@ -203,6 +204,39 @@ magic_damage = max(20, (weapon.max_dmg + player.power) * player.ap_max)
 - Огненный свиток: наносит урон и накладывает горение на следующий ход с тем же уроном.
 - Ледяной свиток: наносит урон и пропускает следующий ход цели (не стакается, работает на боссе).
 - Свиток молнии: наносит полный урон всем врагам.
+
+
+### Поздний босс (павший герой)
+```text
+steps = max(1, (floor - 10) // 10)
+max_hit = weapon.max_dmg + player.power
+avg_hit = (weapon.min_dmg + weapon.max_dmg) / 2 + player.power
+resolve = 1.2 if HP == hp_max else 1.0
+turn_burst = max_hit * player.ap_max * resolve
+min_turn_hp = turn_burst * (4 - 1) + 1
+
+boss_hp = max(player.hp_max * 3.0, turn_burst * 1.8, min_turn_hp) * (1 + 0.12 * steps)
+boss_attack = max(player.hp_max * 0.33, 12) * (1 + 0.07 * steps)
+boss_armor = max(2.5, avg_hit * 0.25 / max(0.2, 1 - weapon.armor_pierce))
+boss_accuracy = clamp(0.78 + 0.015 * steps, 0.70, 0.92)
+boss_evasion = clamp(0.07 + 0.01 * steps, 0.05, 0.22)
+```
+
+### Дочь некроманта (ультимативный босс)
+```text
+steps = max(1, floor // 100)
+max_hit = weapon.max_dmg + player.power
+avg_hit = (weapon.min_dmg + weapon.max_dmg) / 2 + player.power
+resolve = 1.2 if HP == hp_max else 1.0
+burst = max_hit * player.ap_max * resolve
+
+boss_hp = max(player.hp_max * 4.5, burst * 3.0, 2000) * (1 + 0.2 * steps)
+boss_attack = max(player.hp_max * 0.45, 18) * (1 + 0.1 * steps)
+boss_armor = max(4.0, avg_hit * 0.35 / max(0.2, 1 - weapon.armor_pierce))
+boss_accuracy = clamp(0.85 + 0.02 * steps, 0.80, 0.97)
+boss_evasion = clamp(0.10 + 0.015 * steps, 0.08, 0.28)
+```
+
 
 
 ## TODO для контента

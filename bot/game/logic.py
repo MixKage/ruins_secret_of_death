@@ -30,6 +30,7 @@ LATE_BOSS_SCALE_POWER = 0.12
 LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
 LATE_BOSS_SCALE_EVASION = 0.01
+LATE_BOSS_MIN_TURNS = 4
 
 BOSS_ARTIFACT_OPTIONS = [
     {
@@ -126,6 +127,17 @@ def _add_potion(player: Dict, potion: Dict | None, count: int = 1) -> Tuple[int,
         player.setdefault("potions", []).append(copy.deepcopy(potion))
     return to_add, count - to_add
 
+
+def _add_scroll(player: Dict, scroll: Dict | None) -> Dict | None:
+    if not scroll:
+        return None
+    if not isinstance(player.get("scrolls"), list):
+        player["scrolls"] = []
+    added = copy.deepcopy(scroll)
+    player["scrolls"].append(added)
+    return added
+
+
 def _apply_freeze(enemy: Dict) -> None:
     enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
 
@@ -188,12 +200,16 @@ def _grant_medium_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
     return _add_potion(player, potion, count=count)
 
 
+
+
+def _grant_strong_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
+    potion = copy.deepcopy(get_upgrade_by_id("potion_strong"))
+    return _add_potion(player, potion, count=count)
 def _grant_random_scroll(player: Dict) -> Dict | None:
     if not SCROLLS:
         return None
-    scroll = copy.deepcopy(random.choice(SCROLLS))
-    player.setdefault("scrolls", []).append(scroll)
-    return scroll
+    scroll = random.choice(SCROLLS)
+    return _add_scroll(player, scroll)
 
 def _mutate_enemy_template(template: Dict) -> Dict:
     mutated = copy.deepcopy(template)
@@ -405,35 +421,78 @@ def build_fallen_boss_intro(boss_name: str) -> List[str]:
 
 def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     steps = max(1, (floor - BOSS_FLOOR) // LATE_BOSS_FLOOR_STEP)
-    scale_bonus = 1.0 + steps * LATE_BOSS_SCALE_POWER
-    base = build_boss(player)
-    base["id"] = "fallen_hero"
-    base["name"] = boss_name
-    base["hp"] = int(base["hp"] * scale_bonus)
-    base["max_hp"] = int(base["max_hp"] * scale_bonus)
-    base["attack"] = max(1, int(base["attack"] * scale_bonus))
-    base["armor"] = base["armor"] * (1.0 + steps * LATE_BOSS_SCALE_ARMOR)
-    base["accuracy"] = _clamp(base["accuracy"] + steps * LATE_BOSS_SCALE_ACCURACY, 0.6, 0.95)
-    base["evasion"] = _clamp(base["evasion"] + steps * LATE_BOSS_SCALE_EVASION, 0.05, 0.3)
-    base["info"] = "Павший авантюрист, поднятый темной силой."
-    base["danger"] = "легендарная"
-    base["min_floor"] = floor
-    base["max_floor"] = floor
-    return base
+    weapon = player.get("weapon", {})
+    max_hit = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
+    avg_hit = (int(weapon.get("min_dmg", 0)) + int(weapon.get("max_dmg", 0))) / 2 + int(player.get("power", 0))
+    resolve_mult = 1.2 if _has_resolve(player) else 1.0
+    turn_burst = max(1, max_hit * int(player.get("ap_max", 1)) * resolve_mult)
+
+    hp_base = max(player.get("hp_max", 0) * 3.0, turn_burst * 1.8)
+    min_turn_hp = turn_burst * (LATE_BOSS_MIN_TURNS - 1) + 1
+    hp = int(max(hp_base, min_turn_hp) * (1.0 + 0.12 * steps))
+    attack = int(max(player.get("hp_max", 0) * 0.33, 12) * (1.0 + 0.07 * steps))
+    armor_pierce = weapon.get("armor_pierce", 0.0)
+    armor = max(2.5, avg_hit * 0.25 / max(0.2, 1.0 - armor_pierce))
+    accuracy = _clamp(0.78 + 0.015 * steps, 0.7, 0.92)
+    evasion = _clamp(0.07 + 0.01 * steps, 0.05, 0.22)
+
+    return {
+        "id": "fallen_hero",
+        "name": boss_name,
+        "hp": hp,
+        "max_hp": hp,
+        "attack": max(1, attack),
+        "armor": armor,
+        "accuracy": accuracy,
+        "evasion": evasion,
+        "bleed_turns": 0,
+        "bleed_damage": 0,
+        "burn_turns": 0,
+        "burn_damage": 0,
+        "skip_turns": 0,
+        "counted_dead": False,
+        "info": "Павший авантюрист, поднятый темной силой.",
+        "danger": "легендарная",
+        "min_floor": floor,
+        "max_floor": floor,
+    }
 
 def build_daughter_boss(player: Dict, floor: int) -> Dict:
-    base = build_boss(player)
-    hp_value = max(2000, int(player.get("ap_max", 1)) * 100)
-    base["id"] = "necromancer_daughter"
-    base["name"] = DAUGHTER_BOSS_NAME
-    base["hp"] = hp_value
-    base["max_hp"] = hp_value
-    base["attack"] = max(1, int(player.get("hp_max", 1) / 6))
-    base["info"] = "Дочь некроманта, лишенная души и ведомая жаждой убийства."
-    base["danger"] = "легендарная"
-    base["min_floor"] = floor
-    base["max_floor"] = floor
-    return base
+    steps = max(1, floor // ULTIMATE_BOSS_FLOOR_STEP)
+    weapon = player.get("weapon", {})
+    max_hit = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
+    avg_hit = (int(weapon.get("min_dmg", 0)) + int(weapon.get("max_dmg", 0))) / 2 + int(player.get("power", 0))
+    resolve_mult = 1.2 if _has_resolve(player) else 1.0
+    burst = max_hit * int(player.get("ap_max", 1)) * resolve_mult
+
+    hp_base = max(player.get("hp_max", 0) * 4.5, burst * 3.0, 2000)
+    hp = int(hp_base * (1.0 + 0.2 * steps))
+    attack = int(max(player.get("hp_max", 0) * 0.45, 18) * (1.0 + 0.1 * steps))
+    armor_pierce = weapon.get("armor_pierce", 0.0)
+    armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce))
+    accuracy = _clamp(0.85 + 0.02 * steps, 0.8, 0.97)
+    evasion = _clamp(0.1 + 0.015 * steps, 0.08, 0.28)
+
+    return {
+        "id": "necromancer_daughter",
+        "name": DAUGHTER_BOSS_NAME,
+        "hp": hp,
+        "max_hp": hp,
+        "attack": max(1, attack),
+        "armor": armor,
+        "accuracy": accuracy,
+        "evasion": evasion,
+        "bleed_turns": 0,
+        "bleed_damage": 0,
+        "burn_turns": 0,
+        "burn_damage": 0,
+        "skip_turns": 0,
+        "counted_dead": False,
+        "info": "Дочь некроманта, лишенная души и ведомая жаждой убийства.",
+        "danger": "легендарная",
+        "min_floor": floor,
+        "max_floor": floor,
+    }
 
 def new_run_state() -> Dict:
     weapon = copy.deepcopy(random.choice(_weapons_for_floor(1)))
@@ -442,8 +501,8 @@ def new_run_state() -> Dict:
     player = {
         "hp": 30,
         "hp_max": 30,
-        "ap": 2,
-        "ap_max": 2,
+        "ap": 3,
+        "ap_max": 3,
         "armor": 0.0,
         "accuracy": 0.7,
         "evasion": 0.05,
@@ -451,10 +510,12 @@ def new_run_state() -> Dict:
         "luck": 0.2,
         "weapon": weapon,
         "potions": [],
-        "scrolls": [ice_scroll] if ice_scroll else [],
+        "scrolls": [],
     }
     if potion:
         _add_potion(player, potion, count=1)
+    if ice_scroll:
+        _add_scroll(player, ice_scroll)
     state = {
         "floor": 1,
         "phase": "battle",
@@ -604,13 +665,25 @@ def _floor_range_label(min_floor: int, max_floor: int) -> str:
     return f"{min_floor}-{max_floor}"
 
 def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor: int | None = None) -> str:
-    if not enemies:
+    alive = [enemy for enemy in enemies if enemy.get("hp", 0) > 0]
+    if not alive:
         return "Справка недоступна: врагов нет."
     seen = set()
     lines = ["<b>Справка по противникам:</b>"]
     if player:
         lines.append("<i>Урон рассчитан с учетом ваших характеристик.</i>")
-    for enemy in enemies:
+        if len(alive) > 1:
+            total_expected = 0.0
+            player_armor = player.get("armor", 0)
+            player_evasion = player.get("evasion", 0.0)
+            for enemy in enemies:
+                attack = enemy.get("attack", 0)
+                hit_damage = max(1, int(round(attack - player_armor)))
+                hit_chance = _clamp(enemy.get("accuracy", 0.0) - player_evasion, 0.15, 0.95)
+                total_expected += hit_damage * hit_chance
+            total_display = max(1, int(round(total_expected)))
+            lines.append(f"<b>Суммарный ожидаемый урон за ход:</b> {total_display}")
+    for enemy in alive:
         enemy_id = enemy.get("id")
         if enemy_id in seen:
             continue
@@ -634,7 +707,7 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
             else:
                 hit_chance = _clamp(player_accuracy - enemy_evasion, 0.15, 0.95)
             hit_chance_pct = int(round(hit_chance * 100))
-            damage_text = f"<b>Урон при попадании:</b> {hit_damage} | <b>Шанс попадания:</b> {hit_chance_pct}%"
+            damage_text = f"<b>Урон противника:</b> {hit_damage} | <b>Шанс попадания по врагу:</b> {hit_chance_pct}%"
             armor_pierce = weapon.get("armor_pierce", 0.0)
             pierce_pct = int(round(armor_pierce * 100))
             if pierce_pct > 0:
@@ -732,6 +805,8 @@ def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
 
 def player_use_scroll(state: Dict, scroll_index: int) -> None:
     player = state["player"]
+    if not isinstance(player.get("scrolls"), list):
+        player["scrolls"] = []
     scrolls = player.get("scrolls", [])
     if player["ap"] <= 0:
         _append_log(state, "Нет ОД для использования свитка.")
@@ -815,6 +890,11 @@ def check_battle_end(state: Dict) -> None:
         elif state.get("boss_kind") == "fallen":
             boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
             _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
+            added, dropped = _grant_strong_potion(state["player"], count=1)
+            if added:
+                _append_log(state, "Награда: <b>сильное зелье</b>.")
+            if dropped:
+                _append_log(state, "Нет места для зелий — награда сгорает.")
         state["phase"] = "reward"
         state["rewards"] = generate_rewards(state["floor"], state.get("player"))
         _append_log(state, f"<b>Этаж {state['floor']}</b> зачищен. Выберите награду.")
@@ -923,10 +1003,11 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
                 _append_log(state, "Нет места для зелий — находка сгорает.")
             return True
     if reward["type"] == "scroll":
-        scroll = reward["item"]
-        player.setdefault("scrolls", []).append(scroll)
-        _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
-        return True
+        scroll = _add_scroll(player, reward["item"])
+        if scroll:
+            _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
+            return True
+        return False
     return False
 
 
@@ -1201,10 +1282,27 @@ def render_state(state: Dict) -> str:
         lines.append(f"<b>Магический урон:</b> {magic_damage} | <b>Стоимость:</b> 1 ОД")
         scrolls = player.get("scrolls", [])
         if scrolls:
-            for idx, scroll in enumerate(scrolls, start=1):
-                desc = scroll.get("desc", "").strip()
-                desc_text = f" — <i>{desc}</i>" if desc else ""
-                lines.append(f"{idx}. <b>{scroll['name']}</b>{desc_text}")
+            grouped = {}
+            order = []
+            for scroll in scrolls:
+                scroll_id = scroll.get("id")
+                if not scroll_id:
+                    continue
+                if scroll_id not in grouped:
+                    grouped[scroll_id] = {
+                        "name": scroll.get("name", "Свиток"),
+                        "desc": scroll.get("desc", "").strip(),
+                        "count": 0,
+                    }
+                    order.append(scroll_id)
+                grouped[scroll_id]["count"] += 1
+            for idx, scroll_id in enumerate(order, start=1):
+                entry = grouped[scroll_id]
+                label = entry["name"]
+                if entry["count"] > 1:
+                    label = f"{label} x{entry['count']}"
+                desc_text = f" — <i>{entry['desc']}</i>" if entry["desc"] else ""
+                lines.append(f"{idx}. <b>{label}</b>{desc_text}")
             lines.append("")
             lines.append("<i>Выберите свиток для использования.</i>")
         else:

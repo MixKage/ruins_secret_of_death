@@ -424,6 +424,24 @@ async def inventory_action(callback: CallbackQuery) -> None:
         await callback.answer()
         await _send_state(callback, state, run_id)
         return
+    if action == "use_id" and len(parts) > 2:
+        scroll_id = parts[2]
+        state["phase"] = "battle"
+        scrolls = state.get("player", {}).get("scrolls", [])
+        index = None
+        for idx, scroll in enumerate(scrolls):
+            if scroll.get("id") == scroll_id:
+                index = idx
+                break
+        if index is None:
+            await callback.answer("Свиток не найден.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        player_use_scroll(state, index)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
     if action == "use" and len(parts) > 2:
         try:
             index = int(parts[2])

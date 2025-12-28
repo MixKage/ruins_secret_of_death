@@ -66,8 +66,25 @@ def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineK
 
 def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for idx, scroll in enumerate(scrolls):
-        builder.button(text=scroll["name"], callback_data=f"inventory:use:{idx}")
+    grouped = {}
+    order = []
+    for scroll in scrolls:
+        scroll_id = scroll.get("id") if isinstance(scroll, dict) else None
+        if not scroll_id:
+            continue
+        if scroll_id not in grouped:
+            grouped[scroll_id] = {
+                "name": scroll.get("name", "Свиток"),
+                "count": 0,
+            }
+            order.append(scroll_id)
+        grouped[scroll_id]["count"] += 1
+    for scroll_id in order:
+        entry = grouped[scroll_id]
+        label = entry["name"]
+        if entry["count"] > 1:
+            label = f"{label} x{entry['count']}"
+        builder.button(text=label, callback_data=f"inventory:use_id:{scroll_id}")
     builder.button(text="Назад", callback_data="inventory:back")
     builder.adjust(1)
     return builder.as_markup()
