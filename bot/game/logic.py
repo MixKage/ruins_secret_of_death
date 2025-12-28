@@ -26,7 +26,7 @@ POTION_LIMITS = {
 BOSS_FLOOR = 10
 LATE_BOSS_FLOOR_STEP = 10
 LATE_BOSS_NAME_FALLBACK = "Павший герой"
-ULTIMATE_BOSS_FLOOR_STEP = 100
+ULTIMATE_BOSS_FLOOR_STEP = 50
 DAUGHTER_BOSS_NAME = "Дочь некроманта"
 LATE_BOSS_SCALE_POWER = 0.12
 LATE_BOSS_SCALE_ARMOR = 0.05
@@ -772,6 +772,8 @@ def player_attack(state: Dict) -> None:
     if target is None:
         return
 
+    alive_before = len(_alive_enemies(state["enemies"]))
+
     last_breath = _is_last_breath(player, state["floor"])
     hit = True if last_breath else roll_hit(player["accuracy"] + weapon["accuracy_bonus"], target["evasion"])
     if hit:
@@ -796,6 +798,11 @@ def player_attack(state: Dict) -> None:
         _append_log(state, "Вы промахиваетесь.")
 
     check_battle_end(state)
+
+    if alive_before > 3:
+        alive_after = len(_alive_enemies(state["enemies"]))
+        killed = max(0, alive_before - alive_after)
+        _append_log(state, f"Побеждено врагов за ход: {killed}.")
 
 def player_use_potion(state: Dict) -> None:
     player = state["player"]
@@ -864,6 +871,7 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
     enemies = _alive_enemies(state["enemies"])
+    total_damage = 0
 
     for enemy in list(enemies):
         if enemy["bleed_turns"] > 0:
@@ -879,6 +887,7 @@ def enemy_phase(state: Dict) -> None:
     enemies = _alive_enemies(state["enemies"])
     if not enemies:
         return
+    group_size = len(enemies)
 
     for enemy in enemies:
         if enemy.get("skip_turns", 0) > 0:
@@ -888,6 +897,7 @@ def enemy_phase(state: Dict) -> None:
         if roll_hit(enemy["accuracy"], player["evasion"]):
             damage = max(1, int(enemy["attack"] - player["armor"]))
             player["hp"] -= damage
+            total_damage += damage
             _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
         else:
             _append_log(state, f"{enemy['name']} промахивается.")
@@ -896,6 +906,9 @@ def enemy_phase(state: Dict) -> None:
             state["phase"] = "dead"
             _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
             return
+
+    if state["phase"] == "battle" and group_size > 3 and total_damage > 0:
+        _append_log(state, f"Суммарный урон от врагов: {total_damage}.")
 
 def check_battle_end(state: Dict) -> None:
     if state["phase"] == "dead":
