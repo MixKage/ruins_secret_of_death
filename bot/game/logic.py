@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple
 from .data import CHEST_LOOT, ENEMIES, SCROLLS, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
 
 MAX_LOG_LINES = 4
+MESSAGE_LIMIT = 4096
+INFO_TRUNCATED_LINE = "<i>Справка обрезана.</i>"
 
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
 ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
@@ -77,6 +79,25 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _percent(value: float) -> str:
     return f"{int(round(value * 100))}%"
+
+
+def _trim_lines_to_limit(lines: List[str], limit: int) -> List[str]:
+    if limit <= 0:
+        return []
+    result = []
+    current_len = 0
+    for line in lines:
+        add_len = len(line) + (1 if result else 0)
+        if current_len + add_len > limit:
+            break
+        result.append(line)
+        current_len += add_len
+    if len(result) < len(lines):
+        trunc_line = INFO_TRUNCATED_LINE
+        add_len = len(trunc_line) + (1 if result else 0)
+        if current_len + add_len <= limit:
+            result.append(trunc_line)
+    return result
 
 def _magic_scroll_damage(player: Dict) -> int:
     weapon = player.get("weapon", {})
@@ -1214,9 +1235,9 @@ def render_state(state: Dict) -> str:
                 lines.append(f"- <b>{enemy['name']}</b>: {enemy['hp']}/{enemy['max_hp']} HP")
         else:
             lines.append("<i>Враги отсутствуют.</i>")
+        info_lines = []
         if state.get("show_info"):
-            lines.append("")
-            lines.append(build_enemy_info_text(state.get("enemies", []), player, state.get("floor", 1)))
+            info_lines = ["", *build_enemy_info_text(state.get("enemies", []), player, state.get("floor", 1)).splitlines()]
         if state["phase"] == "forfeit_confirm":
             lines.append("")
             lines.append("<i>Подтвердите сдачу. Забег будет завершен.</i>")
@@ -1310,10 +1331,17 @@ def render_state(state: Dict) -> str:
     elif state["phase"] == "dead":
         lines.append("<b>Вы погибли.</b>")
 
+    log_lines = []
     if state.get("log"):
-        lines.append("")
-        lines.append("<i>Последние события:</i>")
-        lines.extend(state["log"])
+        log_lines = ["", "<i>Последние события:</i>", *state["log"]]
+    if 'info_lines' in locals() and info_lines:
+        base_len = len("\n".join(lines))
+        log_len = len("\n".join(log_lines)) if log_lines else 0
+        allowed = MESSAGE_LIMIT - base_len - log_len
+        info_lines = _trim_lines_to_limit(info_lines, allowed)
+        lines.extend(info_lines)
+    if log_lines:
+        lines.extend(log_lines)
 
     return "\n".join(lines)
 
