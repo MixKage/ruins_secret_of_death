@@ -23,6 +23,10 @@ POTION_LIMITS = {
     "potion_strong": 2,
 }
 
+CURSED_FLOOR_MIN_FLOOR = 50
+CURSED_AP_RATIO = 0.75
+CURSED_FLOOR_CHANCE = 0.2
+
 BOSS_FLOOR = 10
 LATE_BOSS_FLOOR_STEP = 10
 LATE_BOSS_NAME_FALLBACK = "Павший герой"
@@ -33,6 +37,7 @@ LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
 LATE_BOSS_SCALE_EVASION = 0.01
 LATE_BOSS_MIN_TURNS = 4
+SURVIVE_ONE_TURN_FLOOR = 50
 
 BOSS_ARTIFACT_OPTIONS = [
     {
@@ -99,10 +104,34 @@ def _trim_lines_to_limit(lines: List[str], limit: int) -> List[str]:
             result.append(trunc_line)
     return result
 
-def _magic_scroll_damage(player: Dict) -> int:
+def _effective_ap_max(state: Dict) -> int:
+    player = state.get("player", {})
+    ap_max = max(1, int(player.get("ap_max", 1)))
+    ratio = state.get("cursed_ap_ratio")
+    if not ratio:
+        return ap_max
+    return max(1, int(ap_max * ratio))
+
+def _apply_cursed_ap(state: Dict) -> bool:
+    player = state.get("player", {})
+    effective = _effective_ap_max(state)
+    if player.get("ap", 0) > effective:
+        player["ap"] = effective
+        return True
+    return False
+
+def _roll_cursed_floor(floor: int) -> bool:
+    if floor < CURSED_FLOOR_MIN_FLOOR:
+        return False
+    if is_any_boss_floor(floor):
+        return False
+    return random.random() < CURSED_FLOOR_CHANCE
+
+def _magic_scroll_damage(player: Dict, ap_max: int | None = None) -> int:
     weapon = player.get("weapon", {})
     max_weapon = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
-    dmg = max_weapon * int(player.get("ap_max", 1))
+    ap_value = int(ap_max if ap_max is not None else player.get("ap_max", 1))
+    dmg = max_weapon * ap_value
     dmg = max(20, int(dmg))
     if _has_resolve(player):
         dmg = int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS)))
@@ -198,7 +227,10 @@ def enforce_ap_cap(state: Dict) -> bool:
     player = state.get("player")
     if not player:
         return False
-    return _enforce_ap_max_cap(player, state.get("floor", 1))
+    changed = _enforce_ap_max_cap(player, state.get("floor", 1))
+    if _apply_cursed_ap(state):
+        changed = True
+    return changed
 
 
 def _enemy_damage_budget_ratio(floor: int) -> float:
@@ -541,7 +573,7 @@ def new_run_state() -> Dict:
         "floor": 1,
         "phase": "battle",
         "player": player,
-        "enemies": generate_enemy_group(1, player["hp_max"], player["ap_max"]),
+        "enemies": generate_enemy_group(1, player),
         "rewards": [],
         "treasure_reward": None,
         "event_options": [],
@@ -554,6 +586,7 @@ def new_run_state() -> Dict:
         "boss_kind": None,
         "boss_name": None,
         "boss_intro_lines": None,
+        "cursed_ap_ratio": None,
         "log": [],
     }
     _append_log(state, f"Вы нашли <b>{weapon['name']}</b> и спускаетесь на этаж <b>1</b>.")
@@ -566,8 +599,15 @@ def _max_group_size_for_floor(floor: int) -> int:
         return 2
     return 3
 
-def generate_enemy_group(floor: int, player_hp_max: int, player_ap_max: int) -> List[Dict]:
+def generate_enemy_group(floor: int, player: Dict, ap_max_override: int | None = None) -> List[Dict]:
     enemies = _enemies_for_floor(floor)
+    player_hp_max = max(1, int(player.get("hp_max", 1)))
+    ap_source = ap_max_override if ap_max_override is not None else player.get("ap_max", 1)
+    player_ap_max = max(1, int(ap_source))
+    player_view = player
+    if ap_max_override is not None and int(player.get("ap_max", 1)) != player_ap_max:
+        player_view = dict(player)
+        player_view["ap_max"] = player_ap_max
     max_group = _max_group_size_for_floor(floor)
     min_group = 1
     if floor > 11:
@@ -587,21 +627,30 @@ def generate_enemy_group(floor: int, player_hp_max: int, player_ap_max: int) -> 
             group_size = min_group
         else:
             group_size = random.randint(min_group, max_group)
-        group = [build_enemy(random.choice(enemies), floor) for _ in range(group_size)]
+        group = [build_enemy(random.choice(enemies), floor, player_view) for _ in range(group_size)]
         if _enemy_group_within_budget(group, budget):
             return group
 
-    group = [build_enemy(random.choice(enemies), floor) for _ in range(min_group)]
+    group = [build_enemy(random.choice(enemies), floor, player_view) for _ in range(min_group)]
     _scale_group_attack_to_budget(group, budget)
     return group
 
-def build_enemy(template: Dict, floor: int) -> Dict:
+def _min_enemy_hp_after_full_turn(player: Dict, enemy: Dict) -> int:
+    weapon = player.get("weapon", {})
+    base = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
+    armor_pierce = weapon.get("armor_pierce", 0.0)
+    armor = max(0.0, enemy.get("armor", 0.0) * (1.0 - armor_pierce))
+    per_hit = max(1, int(base - armor))
+    ap_max = max(1, int(player.get("ap_max", 1)))
+    return per_hit * ap_max + 1
+
+def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
     max_hp = int(template["base_hp"] + template["hp_per_floor"] * floor)
     attack = template["base_attack"] + template["attack_per_floor"] * floor
     armor = template["base_armor"] + template["armor_per_floor"] * floor
     accuracy = _clamp(template["base_accuracy"] + floor * 0.01, 0.4, 0.95)
     evasion = _clamp(template["base_evasion"] + floor * 0.005, 0.02, 0.3)
-    return {
+    enemy = {
         "id": template["id"],
         "name": template["name"],
         "hp": max_hp,
@@ -621,6 +670,12 @@ def build_enemy(template: Dict, floor: int) -> Dict:
         "min_floor": template.get("min_floor", 1),
         "max_floor": template.get("max_floor", 999),
     }
+    if player and floor > SURVIVE_ONE_TURN_FLOOR:
+        min_hp = _min_enemy_hp_after_full_turn(player, enemy)
+        if enemy["hp"] < min_hp:
+            enemy["hp"] = min_hp
+            enemy["max_hp"] = min_hp
+    return enemy
 
 def _scale_group_attack_to_budget(enemies: List[Dict], budget: float) -> None:
     total_attack = sum(enemy["attack"] for enemy in enemies)
@@ -755,7 +810,7 @@ def end_turn(state: Dict) -> None:
         return
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
-    player["ap"] = player["ap_max"]
+    player["ap"] = _effective_ap_max(state)
     enemy_phase(state)
     _tally_kills(state)
     check_battle_end(state)
@@ -812,7 +867,7 @@ def player_use_potion(state: Dict) -> None:
 
     potion = player["potions"].pop()
     player["hp"] = min(player["hp_max"], player["hp"] + potion["heal"])
-    player["ap"] = min(player["ap_max"], player["ap"] + potion["ap_restore"])
+    player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
     _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
 
     check_battle_end(state)
@@ -824,7 +879,7 @@ def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
         if potion.get("id") == potion_id:
             potion = potions.pop(idx)
             player["hp"] = min(player["hp_max"], player["hp"] + potion["heal"])
-            player["ap"] = min(player["ap_max"], player["ap"] + potion["ap_restore"])
+            player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
             _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
             check_battle_end(state)
             return
@@ -849,7 +904,7 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
 
     scroll = scrolls.pop(scroll_index)
     player["ap"] -= 1
-    damage = _magic_scroll_damage(player)
+    damage = _magic_scroll_damage(player, ap_max=_effective_ap_max(state))
     element = scroll.get("element")
 
     if element == "lightning":
@@ -1178,11 +1233,12 @@ def advance_floor(state: Dict) -> None:
     state["event_options"] = []
     state["boss_artifacts"] = []
     state["show_info"] = False
+    state["cursed_ap_ratio"] = None
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
-    player["ap"] = player["ap_max"]
     if is_any_boss_floor(state["floor"]):
         player["hp"] = player["hp_max"]
+        player["ap"] = player["ap_max"]
         state["phase"] = "boss_prep"
         state["boss_artifacts"] = generate_boss_artifacts()
         if is_boss_floor(state["floor"]):
@@ -1201,24 +1257,30 @@ def advance_floor(state: Dict) -> None:
             state["boss_intro_lines"] = None
             state["enemies"] = [build_boss(player)]
         return
+    if _roll_cursed_floor(state["floor"]):
+        state["cursed_ap_ratio"] = CURSED_AP_RATIO
+    player["ap"] = _effective_ap_max(state)
     state["boss_kind"] = None
     state["boss_name"] = None
     state["boss_intro_lines"] = None
     state["phase"] = "battle"
-    state["enemies"] = generate_enemy_group(state["floor"], player["hp_max"], player["ap_max"])
+    state["enemies"] = generate_enemy_group(state["floor"], player, _effective_ap_max(state))
     _append_log(state, f"Вы спускаетесь на этаж <b>{state['floor']}</b>.")
+    if state.get("cursed_ap_ratio"):
+        _append_log(state, "Проклятый этаж: ОД снижены до <b>3/4</b>.")
 
 def render_state(state: Dict) -> str:
     player = state["player"]
     weapon = player["weapon"]
     enemies = _alive_enemies(state["enemies"])
+    effective_ap_max = _effective_ap_max(state)
 
     last_breath_active = _is_last_breath(player, state["floor"])
     accuracy_value = 1.0 if last_breath_active else player["accuracy"]
 
     lines = [
         f"<b>Этаж:</b> {state['floor']}",
-        f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {player['ap']}/{player['ap_max']}",
+        f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
         f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
         (
             f"<b>Точность:</b> {_percent(accuracy_value)} | "
@@ -1233,6 +1295,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("Решимость — урон +20%")
     if last_breath_active:
         status_notes.append("На последнем издыхании — точность 100%")
+    if state.get("cursed_ap_ratio"):
+        status_notes.append("Проклятие — ОД 3/4")
     if status_notes:
         lines.append(f"<b>Состояние:</b> <i>{' / '.join(status_notes)}</i>")
     lines.extend([
@@ -1321,7 +1385,7 @@ def render_state(state: Dict) -> str:
         lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
-        magic_damage = _magic_scroll_damage(player)
+        magic_damage = _magic_scroll_damage(player, ap_max=_effective_ap_max(state))
         lines.append(f"<b>Магический урон:</b> {magic_damage} | <b>Стоимость:</b> 1 ОД")
         scrolls = player.get("scrolls", [])
         if scrolls:
