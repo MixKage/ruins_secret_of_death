@@ -14,6 +14,7 @@ from bot.game.logic import (
     end_turn,
     enforce_ap_cap,
     new_run_state,
+    _append_log,
     player_attack,
     player_use_potion,
     player_use_potion_by_id,
@@ -250,10 +251,21 @@ async def battle_action(callback: CallbackQuery) -> None:
     if action == "attack":
         player_attack(state)
     elif action == "attack_all":
+        boss_target = None
+        total_boss_damage = None
+        if state.get("boss_kind"):
+            boss_target = next((enemy for enemy in state.get("enemies", []) if enemy.get("hp", 0) > 0), None)
+            if boss_target:
+                total_boss_damage = 0
         while state["phase"] == "battle" and state["player"]["ap"] > 0:
+            prev_hp = boss_target.get("hp", 0) if boss_target else 0
             player_attack(state)
+            if total_boss_damage is not None and boss_target:
+                total_boss_damage += max(0, prev_hp - boss_target.get("hp", 0))
             if state["phase"] != "battle":
                 break
+        if total_boss_damage is not None and total_boss_damage > 0:
+            _append_log(state, f"Суммарный урон по боссу: {total_boss_damage}.")
     elif action == "inventory":
         state["phase"] = "inventory"
         await db.update_run(run_id, state)
