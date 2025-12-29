@@ -89,9 +89,9 @@ def _append_log(state: Dict, message: str) -> None:
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
-def _percent(value: float) -> str:
-    return f"{int(round(value * 100))}%"
-
+def _percent(value: float, show_percent: bool = True) -> str:
+    percent_value = int(round(value * 100))
+    return f"{percent_value}%" if show_percent else str(percent_value)
 
 def _trim_lines_to_limit(lines: List[str], limit: int) -> List[str]:
     if limit <= 0:
@@ -1410,7 +1410,7 @@ def render_state(state: Dict) -> str:
         f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
         f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
         (
-            f"<b>Точность:</b> {_percent(accuracy_value)} | "
+            f"<b>Точность:</b> {_percent(accuracy_value, show_percent=False)} | "
             f"<b>Уклонение:</b> {_percent(player['evasion'])} | "
             f"<b>Броня:</b> {int(round(player['armor']))} | "
             f"<b>Удача:</b> {_percent(player.get('luck', 0.0))}"
