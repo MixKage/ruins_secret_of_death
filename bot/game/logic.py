@@ -821,15 +821,18 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
         lines.append("<i>Урон рассчитан с учетом ваших характеристик.</i>")
         if len(alive) > 1:
             total_expected = 0.0
+            total_max = 0
             player_armor = player.get("armor", 0)
             player_evasion = player.get("evasion", 0.0)
-            for enemy in enemies:
+            for enemy in alive:
                 attack = enemy.get("attack", 0)
                 hit_damage = max(1, int(round(attack - player_armor)))
                 hit_chance = _clamp(enemy.get("accuracy", 0.0) - player_evasion, 0.15, 0.95)
                 total_expected += hit_damage * hit_chance
+                total_max += hit_damage
             total_display = max(1, int(round(total_expected)))
-            lines.append(f"<b>Суммарный ожидаемый урон за ход:</b> {total_display}")
+            lines.append(f"<b>Средний ожидаемый урон за ход:</b> {total_display}")
+            lines.append(f"<b>Макс. урон при попадании всех:</b> {total_max}")
     for enemy in alive:
         enemy_id = enemy.get("id")
         if enemy_id in seen:
