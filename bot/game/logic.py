@@ -37,6 +37,11 @@ LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
 LATE_BOSS_SCALE_EVASION = 0.01
 LATE_BOSS_MIN_TURNS = 4
+ENEMY_ARMOR_REDUCED_RATIO = 0.7
+ENEMY_ARMOR_PIERCE_START_FLOOR = 50
+ENEMY_ARMOR_PIERCE_BASE = 0.1
+ENEMY_ARMOR_PIERCE_PER_FLOOR = 0.002
+ENEMY_ARMOR_PIERCE_MAX = 0.2
 MUTATED_NAME_PREFIX = "Мутированный"
 MUTATED_NAME_PREFIX_LATE = "Оскверненный"
 ELITE_TRAIT_SHADOW = "shadow_blade"
@@ -277,6 +282,26 @@ def _enemy_damage_budget_ratio(floor: int) -> float:
         steps = (floor - 20) // 10
         base += 0.1 * steps
     return min(base, 1.0)
+
+def _enemy_armor_pierce_for_floor(floor: int) -> float:
+    if floor <= ENEMY_ARMOR_PIERCE_START_FLOOR:
+        return 0.0
+    steps = floor - ENEMY_ARMOR_PIERCE_START_FLOOR
+    pierce = ENEMY_ARMOR_PIERCE_BASE + ENEMY_ARMOR_PIERCE_PER_FLOOR * steps
+    return min(ENEMY_ARMOR_PIERCE_MAX, pierce)
+
+def _enemy_damage_to_player(enemy: Dict, player: Dict, floor: int | None = None) -> int:
+    attack = float(enemy.get("attack", 0))
+    armor = float(player.get("armor", 0))
+    pierce = float(enemy.get("armor_pierce", 0.0))
+    if floor is not None:
+        pierce = max(pierce, _enemy_armor_pierce_for_floor(floor))
+    reduced_portion = attack * ENEMY_ARMOR_REDUCED_RATIO
+    bypass_portion = attack * (1.0 - ENEMY_ARMOR_REDUCED_RATIO)
+    effective_armor = armor * (1.0 - pierce)
+    reduced_damage = max(0.0, reduced_portion - effective_armor)
+    total = reduced_damage + bypass_portion
+    return max(1, int(round(total)))
 
 def _is_last_breath(player: Dict, floor: int) -> bool:
     max_hp = max(1, int(player.get("hp_max", 1)))
@@ -551,6 +576,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
     armor = max(2.5, avg_hit * 0.25 / max(0.2, 1.0 - armor_pierce))
     accuracy = _clamp(0.78 + 0.015 * steps, 0.7, 0.92)
     evasion = _clamp(0.07 + 0.01 * steps, 0.05, 0.22)
+    armor_pierce = _enemy_armor_pierce_for_floor(floor)
 
     return {
         "id": "fallen_hero",
@@ -559,6 +585,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
         "max_hp": hp,
         "attack": max(1, attack),
         "armor": armor,
+        "armor_pierce": armor_pierce,
         "accuracy": accuracy,
         "evasion": evasion,
         "bleed_turns": 0,
@@ -588,6 +615,7 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
     armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce))
     accuracy = _clamp(0.85 + 0.02 * steps, 0.8, 0.97)
     evasion = _clamp(0.1 + 0.015 * steps, 0.08, 0.28)
+    armor_pierce = _enemy_armor_pierce_for_floor(floor)
 
     return {
         "id": "necromancer_daughter",
@@ -596,6 +624,7 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
         "max_hp": hp,
         "attack": max(1, attack),
         "armor": armor,
+        "armor_pierce": armor_pierce,
         "accuracy": accuracy,
         "evasion": evasion,
         "bleed_turns": 0,
@@ -717,6 +746,7 @@ def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
     accuracy = _clamp(template["base_accuracy"] + floor * 0.01, 0.4, 0.95)
     evasion = _clamp(template["base_evasion"] + floor * 0.005, 0.02, 0.3)
     traits = list(template.get("traits", []))
+    armor_pierce = _enemy_armor_pierce_for_floor(floor)
     enemy = {
         "id": template["id"],
         "name": template["name"],
@@ -724,6 +754,7 @@ def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
         "max_hp": max_hp,
         "attack": attack,
         "armor": armor,
+        "armor_pierce": armor_pierce,
         "armor_base": armor,
         "accuracy": accuracy,
         "evasion": evasion,
@@ -825,8 +856,7 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
             player_armor = player.get("armor", 0)
             player_evasion = player.get("evasion", 0.0)
             for enemy in alive:
-                attack = enemy.get("attack", 0)
-                hit_damage = max(1, int(round(attack - player_armor)))
+                hit_damage = _enemy_damage_to_player(enemy, player, floor)
                 hit_chance = _clamp(enemy.get("accuracy", 0.0) - player_evasion, 0.15, 0.95)
                 total_expected += hit_damage * hit_chance
                 total_max += hit_damage
@@ -848,8 +878,7 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
         enemy_armor_display = int(round(enemy_armor))
         if player:
             weapon = player.get("weapon", {})
-            armor = player.get("armor", 0)
-            hit_damage = max(1, int(round(attack - armor)))
+            hit_damage = _enemy_damage_to_player(enemy, player, floor)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0)
             enemy_evasion = enemy.get("evasion", 0.0)
             if floor is not None and _is_last_breath(player, floor):
@@ -1038,7 +1067,7 @@ def enemy_phase(state: Dict) -> None:
             _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
             continue
         if roll_hit(enemy["accuracy"], player["evasion"]):
-            damage = max(1, int(enemy["attack"] - player["armor"]))
+            damage = _enemy_damage_to_player(enemy, player, state.get("floor", 1))
             player["hp"] -= damage
             total_damage += damage
             _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
