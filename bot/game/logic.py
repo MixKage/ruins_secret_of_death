@@ -1438,13 +1438,14 @@ def render_state(state: Dict) -> str:
 
     last_breath_active = _is_last_breath(player, state["floor"])
     accuracy_value = 1.0 if last_breath_active else player["accuracy"]
+    accuracy_display = "∞" if last_breath_active else _percent(accuracy_value, show_percent=False)
 
     lines = [
         f"<b>Этаж:</b> {state['floor']}",
         f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
         f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
         (
-            f"<b>Точность:</b> {_percent(accuracy_value, show_percent=False)} | "
+            f"<b>Точность:</b> {accuracy_display} | "
             f"<b>Уклонение:</b> {_percent(player['evasion'])} | "
             f"<b>Броня:</b> {int(round(player['armor']))} | "
             f"<b>Удача:</b> {_percent(player.get('luck', 0.0))}"
