@@ -37,6 +37,13 @@ LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
 LATE_BOSS_SCALE_EVASION = 0.01
 LATE_BOSS_MIN_TURNS = 4
+MUTATED_NAME_PREFIX = "Мутированный"
+MUTATED_NAME_PREFIX_LATE = "Оскверненный"
+ELITE_TRAIT_SHADOW = "shadow_blade"
+ELITE_TRAIT_STONE = "stone_skin"
+STONE_SKIN_ARMOR_BONUS = 1.0
+STONE_SKIN_MAX_BONUS = 5.0
+ELITE_NAME_PREFIX = "Проклятый"
 SURVIVE_ONE_TURN_FLOOR = 50
 
 BOSS_ARTIFACT_OPTIONS = [
@@ -126,6 +133,21 @@ def _roll_cursed_floor(floor: int) -> bool:
     if is_any_boss_floor(floor):
         return False
     return random.random() < CURSED_FLOOR_CHANCE
+
+def _has_trait(enemy: Dict, trait: str) -> bool:
+    return trait in enemy.get("traits", [])
+
+def _apply_stone_skin(state: Dict, enemy: Dict) -> None:
+    if not _has_trait(enemy, ELITE_TRAIT_STONE):
+        return
+    if enemy.get("hp", 0) <= 0:
+        return
+    base_armor = enemy.get("armor_base", enemy.get("armor", 0.0))
+    max_armor = base_armor + STONE_SKIN_MAX_BONUS
+    new_armor = min(max_armor, enemy.get("armor", 0.0) + STONE_SKIN_ARMOR_BONUS)
+    if new_armor > enemy.get("armor", 0.0):
+        enemy["armor"] = new_armor
+        _append_log(state, f"{enemy['name']} каменеет: броня усиливается.")
 
 def _magic_scroll_damage(player: Dict, ap_max: int | None = None) -> int:
     weapon = player.get("weapon", {})
@@ -264,11 +286,18 @@ def _grant_random_scroll(player: Dict) -> Dict | None:
     scroll = random.choice(SCROLLS)
     return _add_scroll(player, scroll)
 
-def _mutate_enemy_template(template: Dict) -> Dict:
+def _mutate_enemy_template(template: Dict, prefix: str, info_suffix: str) -> Dict:
     mutated = copy.deepcopy(template)
     name = mutated.get("name", "")
-    if not name.startswith("Мутированный "):
-        mutated["name"] = f"Мутированный {name}"
+    traits = mutated.get("traits", [])
+    if traits:
+        prefix = f"{ELITE_NAME_PREFIX} "
+        if not name.startswith(prefix):
+            mutated["name"] = f"{ELITE_NAME_PREFIX} {name}"
+    else:
+        tag = f"{prefix} "
+        if not name.startswith(tag):
+            mutated["name"] = f"{prefix} {name}"
     mutated["base_hp"] = int(round(mutated.get("base_hp", 0) * 1.25))
     mutated["base_attack"] = mutated.get("base_attack", 0) * 1.2
     mutated["base_armor"] = mutated.get("base_armor", 0) * 1.1
@@ -277,13 +306,19 @@ def _mutate_enemy_template(template: Dict) -> Dict:
     mutated["hp_per_floor"] = mutated.get("hp_per_floor", 0) * 1.15
     mutated["attack_per_floor"] = mutated.get("attack_per_floor", 0) * 1.2
     mutated["armor_per_floor"] = mutated.get("armor_per_floor", 0) * 1.15
-    mutated["min_floor"] = BOSS_FLOOR + 1
+    mutated["min_floor"] = max(int(template.get("min_floor", 1)), BOSS_FLOOR + 1)
     mutated["max_floor"] = 999
     info = mutated.get("info", "").strip()
-    if info and "Мутировал" not in info:
-        mutated["info"] = f"{info} Мутировал в глубине руин."
-    elif not info:
-        mutated["info"] = "Мутировал в глубине руин."
+    if traits:
+        if info and "Элитный" not in info:
+            mutated["info"] = f"{info} Элитный слуга проклятых руин."
+        elif not info:
+            mutated["info"] = "Элитный слуга проклятых руин."
+    else:
+        if info and info_suffix not in info:
+            mutated["info"] = f"{info} {info_suffix}"
+        elif not info:
+            mutated["info"] = info_suffix
     return mutated
 
 WEAPON_RARITY_TIERS = [
@@ -348,7 +383,15 @@ def _weapons_for_floor(floor: int) -> List[Dict]:
 def _enemies_for_floor(floor: int) -> List[Dict]:
     if floor > BOSS_FLOOR:
         base_pool = [item for item in ENEMIES if item.get("id") != "necromancer"]
-        return [_mutate_enemy_template(item) for item in base_pool]
+        if floor >= SURVIVE_ONE_TURN_FLOOR:
+            prefix = MUTATED_NAME_PREFIX_LATE
+            suffix = "Осквернен в глубине руин."
+        else:
+            prefix = MUTATED_NAME_PREFIX
+            suffix = "Мутировал в глубине руин."
+        mutated = [_mutate_enemy_template(item, prefix, suffix) for item in base_pool]
+        filtered = _filter_by_floor(mutated, floor)
+        return filtered or mutated
     enemies = _filter_by_floor(ENEMIES, floor)
     return enemies or ENEMIES
 
@@ -629,11 +672,11 @@ def generate_enemy_group(floor: int, player: Dict, ap_max_override: int | None =
             group_size = random.randint(min_group, max_group)
         group = [build_enemy(random.choice(enemies), floor, player_view) for _ in range(group_size)]
         if _enemy_group_within_budget(group, budget):
-            return group
+            return _sort_elites_last(group)
 
     group = [build_enemy(random.choice(enemies), floor, player_view) for _ in range(min_group)]
     _scale_group_attack_to_budget(group, budget)
-    return group
+    return _sort_elites_last(group)
 
 def _min_enemy_hp_after_full_turn(player: Dict, enemy: Dict) -> int:
     weapon = player.get("weapon", {})
@@ -644,12 +687,16 @@ def _min_enemy_hp_after_full_turn(player: Dict, enemy: Dict) -> int:
     ap_max = max(1, int(player.get("ap_max", 1)))
     return per_hit * ap_max + 1
 
+def _sort_elites_last(enemies: List[Dict]) -> List[Dict]:
+    return sorted(enemies, key=lambda enemy: 1 if enemy.get("traits") else 0)
+
 def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
     max_hp = int(template["base_hp"] + template["hp_per_floor"] * floor)
     attack = template["base_attack"] + template["attack_per_floor"] * floor
     armor = template["base_armor"] + template["armor_per_floor"] * floor
     accuracy = _clamp(template["base_accuracy"] + floor * 0.01, 0.4, 0.95)
     evasion = _clamp(template["base_evasion"] + floor * 0.005, 0.02, 0.3)
+    traits = list(template.get("traits", []))
     enemy = {
         "id": template["id"],
         "name": template["name"],
@@ -657,6 +704,7 @@ def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
         "max_hp": max_hp,
         "attack": attack,
         "armor": armor,
+        "armor_base": armor,
         "accuracy": accuracy,
         "evasion": evasion,
         "bleed_turns": 0,
@@ -665,11 +713,14 @@ def build_enemy(template: Dict, floor: int, player: Dict | None = None) -> Dict:
         "burn_damage": 0,
         "skip_turns": 0,
         "counted_dead": False,
+        "traits": traits,
         "info": template.get("info", ""),
         "danger": template.get("danger", "неизвестна"),
         "min_floor": template.get("min_floor", 1),
         "max_floor": template.get("max_floor", 999),
     }
+    if ELITE_TRAIT_SHADOW in traits:
+        enemy["shadow_dodge_used"] = False
     if player and floor > SURVIVE_ONE_TURN_FLOOR:
         min_hp = _min_enemy_hp_after_full_turn(player, enemy)
         if enemy["hp"] < min_hp:
@@ -830,11 +881,18 @@ def player_attack(state: Dict) -> None:
     alive_before = len(_alive_enemies(state["enemies"]))
 
     last_breath = _is_last_breath(player, state["floor"])
-    hit = True if last_breath else roll_hit(player["accuracy"] + weapon["accuracy_bonus"], target["evasion"])
+    shadow_evaded = False
+    if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
+        target["shadow_dodge_used"] = True
+        shadow_evaded = True
+        hit = False
+    else:
+        hit = True if last_breath else roll_hit(player["accuracy"] + weapon["accuracy_bonus"], target["evasion"])
     if hit:
         damage = roll_damage(weapon, player, target)
         target["hp"] -= damage
         _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
+        _apply_stone_skin(state, target)
 
         if weapon["splash_ratio"] > 0:
             splash_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
@@ -843,6 +901,7 @@ def player_attack(state: Dict) -> None:
                 hit_targets = splash_targets[:3]
                 for enemy in hit_targets:
                     enemy["hp"] -= splash_damage
+                    _apply_stone_skin(state, enemy)
                 _append_log(state, f"Сплэш урон: {splash_damage} по {len(hit_targets)} врагам.")
 
         if weapon["bleed_chance"] > 0 and random.random() < weapon["bleed_chance"]:
@@ -850,7 +909,10 @@ def player_attack(state: Dict) -> None:
             target["bleed_damage"] = max(target["bleed_damage"], weapon["bleed_damage"])
             _append_log(state, f"{target['name']} истекает кровью.")
     else:
-        _append_log(state, "Вы промахиваетесь.")
+        if shadow_evaded:
+            _append_log(state, f"{target['name']} растворяется в тени и избегает удара.")
+        else:
+            _append_log(state, "Вы промахиваетесь.")
 
     check_battle_end(state)
 
@@ -911,13 +973,16 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         targets = _alive_enemies(state["enemies"])
         for enemy in targets:
             enemy["hp"] -= damage
+            _apply_stone_skin(state, enemy)
         _append_log(state, f"Вы читаете {scroll['name']}: молнии бьют по всем врагам на {damage} урона.")
     elif element == "ice":
         target["hp"] -= damage
+        _apply_stone_skin(state, target)
         _apply_freeze(target)
         _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и скован льдом.")
     else:
         target["hp"] -= damage
+        _apply_stone_skin(state, target)
         _apply_burn(target, damage)
         _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и горит.")
 

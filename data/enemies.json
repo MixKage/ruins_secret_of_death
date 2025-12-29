@@ -198,6 +198,48 @@
     "info": "Медлительный исполин. Почти не уклоняется и часто промахивается, но броня огромна."
   },
   {
+    "id": "shadow_blade",
+    "name": "Клинок тени",
+    "base_hp": 22,
+    "base_attack": 8,
+    "base_armor": 1,
+    "base_accuracy": 0.8,
+    "base_evasion": 0.22,
+    "hp_per_floor": 2.5,
+    "attack_per_floor": 1.4,
+    "armor_per_floor": 0.2,
+    "group_min": 1,
+    "group_max": 2,
+    "min_floor": 50,
+    "max_floor": 999,
+    "danger": "Мифическая",
+    "info": "Первый удар уходит в пустоту — он исчезает в тени и возвращается мгновенно.",
+    "traits": [
+      "shadow_blade"
+    ]
+  },
+  {
+    "id": "stone_hide",
+    "name": "Каменная шкура",
+    "base_hp": 26,
+    "base_attack": 7,
+    "base_armor": 3,
+    "base_accuracy": 0.6,
+    "base_evasion": 0.06,
+    "hp_per_floor": 3,
+    "attack_per_floor": 1.2,
+    "armor_per_floor": 0.3,
+    "group_min": 1,
+    "group_max": 2,
+    "min_floor": 50,
+    "max_floor": 999,
+    "danger": "Мифическая",
+    "info": "После ранения кожа каменеет — броня растет с каждым ударом.",
+    "traits": [
+      "stone_skin"
+    ]
+  },
+  {
     "id": "necromancer",
     "name": "Некромант",
     "base_hp": 70,

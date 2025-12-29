@@ -67,6 +67,7 @@ python -m bot.main
 - max_floor - максимальный этаж появления.
 - danger - текстовая оценка опасности.
 - info - короткая справка в бою.
+- traits - список особых свойств врага (например, shadow_blade, stone_skin).
 
 ### data/weapons.json
 - id - уникальный идентификатор оружия.
