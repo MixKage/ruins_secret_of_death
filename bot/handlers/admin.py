@@ -30,22 +30,39 @@ router = Router()
 def _format_admin_panel(stats: dict) -> str:
     avg_death_floor = stats.get("avg_death_floor", 0.0)
     avg_text = f"{avg_death_floor:.1f}" if avg_death_floor else "—"
+    season_avg_death_floor = stats.get("season_avg_death_floor", 0.0)
+    season_avg_text = f"{season_avg_death_floor:.1f}" if season_avg_death_floor else "—"
+    season_deaths = stats.get("season_deaths", 0)
     runs_24h = stats.get("runs_24h", 0)
     users_24h = stats.get("users_24h", 0)
     top_killers = stats.get("top_killers", [])
+    season_current_label = stats.get("season_current_label", "—")
+    season_current_key = stats.get("season_current_key", "—")
+    season_expected_label = stats.get("season_expected_label", "—")
+    season_last_processed_label = stats.get("season_last_processed_label", "—")
+    season_last_closed_label = stats.get("season_last_closed_label", "—")
 
     lines = [
         "<b>Админ панель</b>",
         f"<b>Игроков:</b> {stats.get('total_users', 0)}",
         f"<b>Активных забегов:</b> {stats.get('active_runs', 0)}",
         f"<b>Всего забегов:</b> {stats.get('total_runs', 0)}",
-        f"<b>Смертей:</b> {stats.get('total_deaths', 0)}",
-        f"<b>Ср. этаж смерти:</b> {avg_text}",
+        f"<b>Смертей (всего):</b> {stats.get('total_deaths', 0)}",
+        f"<b>Ср. этаж смерти (всего):</b> {avg_text}",
+        f"<b>Смертей (сезон):</b> {season_deaths}",
+        f"<b>Ср. этаж смерти (сезон):</b> {season_avg_text}",
         f"<b>Активность 24ч:</b> {runs_24h} забегов | {users_24h} игроков",
         f"<b>Сундуков открыто:</b> {stats.get('total_chests', 0)}",
         f"<b>Сокровищ найдено:</b> {stats.get('total_treasures', 0)}",
         f"<b>Макс. этаж (глобально):</b> {stats.get('max_floor', 0)}",
     ]
+
+    lines.append("")
+    lines.append("<b>Сезоны:</b>")
+    lines.append(f"- Текущий: {season_current_label} ({season_current_key})")
+    lines.append(f"- Ожидаемый по дате: {season_expected_label}")
+    lines.append(f"- Последний обработанный: {season_last_processed_label}")
+    lines.append(f"- Последний закрытый: {season_last_closed_label}")
 
     if top_killers:
         lines.append("")
@@ -91,6 +108,20 @@ async def _show_admin_panel(callback: CallbackQuery) -> None:
     if not stats:
         await edit_or_send(callback, "Админ панель недоступна.", reply_markup=admin_kb())
         return
+    season_id, season_key, _prev = await db.get_or_create_current_season()
+    last_processed = await get_last_processed_season()
+    expected = expected_season_number()
+    last_closed = await db.get_last_season(ended_only=True)
+    season_deaths, season_avg_death_floor = await db.get_season_death_stats(season_id)
+    stats["season_current_label"] = season_label(season_key)
+    stats["season_current_key"] = season_key
+    stats["season_expected_label"] = season_label(season_key_for_number(expected))
+    stats["season_last_processed_label"] = season_label(season_key_for_number(last_processed))
+    stats["season_last_closed_label"] = (
+        season_label(last_closed[1]) if last_closed else "—"
+    )
+    stats["season_deaths"] = season_deaths
+    stats["season_avg_death_floor"] = season_avg_death_floor
     text = _format_admin_panel(stats)
     await edit_or_send(callback, text, reply_markup=admin_kb())
 

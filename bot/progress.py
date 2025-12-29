@@ -191,7 +191,7 @@ async def award_current_season_badges() -> str:
     return season_key
 
 
-async def record_run_progress(user_id: int, state: Dict) -> None:
+async def record_run_progress(user_id: int, state: Dict, died: bool | None = None) -> None:
     season_id, _ = await ensure_current_season()
     treasure_xp = int(state.get("treasure_xp", 0))
     if treasure_xp <= 0:
@@ -201,7 +201,7 @@ async def record_run_progress(user_id: int, state: Dict) -> None:
     state_with_bonus = dict(state)
     if bonus_xp > 0:
         state_with_bonus["xp_bonus"] = bonus_xp
-    await db.record_season_stats(user_id, season_id, state_with_bonus)
+    await db.record_season_stats(user_id, season_id, state_with_bonus, died=died)
     floor = int(state.get("floor", 0))
     total_xp = floor + bonus_xp
     if total_xp > 0:

@@ -58,7 +58,7 @@ async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, st
     await db.finish_run(run_id, state.get("floor", 0))
     await db.update_user_max_floor(user_id, state.get("floor", 0))
     await db.record_run_stats(user_id, state, died=False)
-    await record_run_progress(user_id, state)
+    await record_run_progress(user_id, state, died=False)
     await callback.answer("Забег завершен.")
     if callback.message:
         await safe_edit_text(
@@ -210,7 +210,7 @@ async def start_new_run(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_id, state.get("floor", 0))
         await db.record_run_stats(user_id, state, died=False)
-        await record_run_progress(user_id, state)
+        await record_run_progress(user_id, state, died=False)
 
     state = new_run_state()
     run_id = await db.create_run(user_id, state)
@@ -330,7 +330,7 @@ async def battle_action(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
-        await record_run_progress(user_row[0], state)
+        await record_run_progress(user_row[0], state, died=True)
 
         await callback.answer()
         if callback.message:
@@ -592,7 +592,7 @@ async def event_choice(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
-        await record_run_progress(user_row[0], state)
+        await record_run_progress(user_row[0], state, died=True)
     else:
         await db.update_run(run_id, state)
 
