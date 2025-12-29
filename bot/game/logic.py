@@ -40,7 +40,8 @@ LATE_BOSS_SCALE_EVASION = 0.01
 LATE_BOSS_MIN_TURNS = 4
 LATE_BOSS_EVASION_PIERCE = 0.3
 LATE_BOSS_GUARANTEED_HIT_EVERY = 3
-DAUGHTER_BOSS_POWER_MULT = 2.0
+DAUGHTER_BOSS_BASE_MULT = 2.0
+DAUGHTER_BOSS_STEP_BONUS = 1.0
 ENEMY_ARMOR_REDUCED_RATIO = 0.7
 ENEMY_ARMOR_PIERCE_START_FLOOR = 50
 ENEMY_ARMOR_PIERCE_BASE = 0.1
@@ -643,6 +644,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
 
 def build_daughter_boss(player: Dict, floor: int) -> Dict:
     steps = max(1, floor // ULTIMATE_BOSS_FLOOR_STEP)
+    power_mult = DAUGHTER_BOSS_BASE_MULT + (steps - 1) * DAUGHTER_BOSS_STEP_BONUS
     weapon = player.get("weapon", {})
     max_hit = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
     avg_hit = (int(weapon.get("min_dmg", 0)) + int(weapon.get("max_dmg", 0))) / 2 + int(player.get("power", 0))
@@ -650,10 +652,13 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
     burst = max_hit * int(player.get("ap_max", 1)) * resolve_mult
 
     hp_base = max(player.get("hp_max", 0) * 4.5, burst * 3.0, 2000)
-    hp = int(hp_base * (1.0 + 0.2 * steps) * DAUGHTER_BOSS_POWER_MULT)
-    attack = int(max(player.get("hp_max", 0) * 0.45, 18) * (1.0 + 0.1 * steps) * DAUGHTER_BOSS_POWER_MULT)
+    hp = int(hp_base * power_mult)
+    player_hp_max = int(player.get("hp_max", 0))
+    attack = int(max(player_hp_max * 0.45, 18) * power_mult)
+    max_attack = max(1, player_hp_max - 1)
+    attack = min(attack, max_attack)
     armor_pierce = weapon.get("armor_pierce", 0.0)
-    armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce)) * DAUGHTER_BOSS_POWER_MULT
+    armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce)) * power_mult
     accuracy = _clamp(0.85 + 0.02 * steps, 0.8, 0.97)
     evasion = _clamp(0.1 + 0.015 * steps, 0.08, 0.28)
     armor_pierce = _enemy_armor_pierce_for_floor(floor)
