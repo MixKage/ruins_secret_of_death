@@ -593,6 +593,12 @@ async def get_broadcast_targets(broadcast_key: str) -> List[Tuple[int, int]]:
         return await cursor.fetchall()
 
 
+async def get_all_user_targets() -> List[Tuple[int, int]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT id, telegram_id FROM users")
+        return await cursor.fetchall()
+
+
 async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

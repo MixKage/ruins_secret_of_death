@@ -20,6 +20,12 @@ def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> Inline
     builder.adjust(1)
     return builder.as_markup()
 
+def broadcast_menu_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Начать приключение", callback_data="menu:broadcast")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def battle_kb(
     has_potion: bool,
     can_attack: bool,
@@ -115,8 +121,16 @@ def admin_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Обновить", callback_data="menu:admin:refresh")
     builder.button(text="Пересчитать значки сезона", callback_data="menu:admin:season_badges")
+    builder.button(text="Падение сервера", callback_data="menu:admin:crash")
     builder.button(text="Меню", callback_data="menu:main")
     builder.adjust(1)
+    return builder.as_markup()
+
+def admin_crash_confirm_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Отправить", callback_data="menu:admin:crash:confirm")
+    builder.button(text="Отмена", callback_data="menu:admin:crash:cancel")
+    builder.adjust(2)
     return builder.as_markup()
 
 def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
