@@ -7,6 +7,7 @@ from .data import CHEST_LOOT, ENEMIES, SCROLLS, UPGRADES, WEAPONS, get_scroll_by
 MAX_LOG_LINES = 4
 MESSAGE_LIMIT = 4096
 INFO_TRUNCATED_LINE = "<i>Справка обрезана.</i>"
+TREASURE_REWARD_XP = 10
 
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
 ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
@@ -37,15 +38,22 @@ LATE_BOSS_SCALE_ARMOR = 0.05
 LATE_BOSS_SCALE_ACCURACY = 0.02
 LATE_BOSS_SCALE_EVASION = 0.01
 LATE_BOSS_MIN_TURNS = 4
+LATE_BOSS_EVASION_PIERCE = 0.3
+LATE_BOSS_GUARANTEED_HIT_EVERY = 3
+DAUGHTER_BOSS_POWER_MULT = 2.0
 ENEMY_ARMOR_REDUCED_RATIO = 0.7
 ENEMY_ARMOR_PIERCE_START_FLOOR = 50
 ENEMY_ARMOR_PIERCE_BASE = 0.1
 ENEMY_ARMOR_PIERCE_PER_FLOOR = 0.002
 ENEMY_ARMOR_PIERCE_MAX = 0.2
+EVASION_REDUCTION_START_FLOOR = 50
+EVASION_REDUCTION_PER_FLOOR = 0.003
+EVASION_REDUCTION_MAX = 0.25
 MUTATED_NAME_PREFIX = "Мутированный"
 MUTATED_NAME_PREFIX_LATE = "Оскверненный"
 ELITE_TRAIT_SHADOW = "shadow_blade"
 ELITE_TRAIT_STONE = "stone_skin"
+ELITE_TRAIT_TRUE_STRIKE = "true_strike"
 STONE_SKIN_ARMOR_BONUS = 1.0
 STONE_SKIN_MAX_BONUS = 5.0
 ELITE_NAME_PREFIX = "Проклятый"
@@ -141,6 +149,29 @@ def _roll_cursed_floor(floor: int) -> bool:
 
 def _has_trait(enemy: Dict, trait: str) -> bool:
     return trait in enemy.get("traits", [])
+
+def _enemy_always_hits(enemy: Dict) -> bool:
+    return bool(enemy.get("always_hit"))
+
+def _enemy_guaranteed_hit_every(enemy: Dict) -> int:
+    return int(enemy.get("guaranteed_hit_every", 0) or 0)
+
+def _enemy_base_hit_chance(enemy: Dict, defender_evasion: float, floor: int | None) -> float:
+    if _enemy_always_hits(enemy):
+        return 1.0
+    evasion = 0.0 if _has_trait(enemy, ELITE_TRAIT_TRUE_STRIKE) else defender_evasion
+    evasion_pierce = float(enemy.get("evasion_pierce", 0.0))
+    if evasion_pierce > 0:
+        evasion = max(0.0, evasion * (1.0 - evasion_pierce))
+    evasion = _effective_evasion(evasion, floor)
+    return _clamp(enemy.get("accuracy", 0.0) - evasion, 0.15, 0.95)
+
+def _enemy_expected_hit_chance(enemy: Dict, defender_evasion: float, floor: int | None) -> float:
+    base = _enemy_base_hit_chance(enemy, defender_evasion, floor)
+    guaranteed_every = _enemy_guaranteed_hit_every(enemy)
+    if guaranteed_every > 0 and base < 1.0:
+        base = min(1.0, base + (1.0 - base) / guaranteed_every)
+    return base
 
 def _apply_stone_skin(state: Dict, enemy: Dict) -> None:
     if not _has_trait(enemy, ELITE_TRAIT_STONE):
@@ -302,6 +333,12 @@ def _enemy_damage_to_player(enemy: Dict, player: Dict, floor: int | None = None)
     reduced_damage = max(0.0, reduced_portion - effective_armor)
     total = reduced_damage + bypass_portion
     return max(1, int(round(total)))
+
+def _effective_evasion(evasion: float, floor: int | None) -> float:
+    if floor is None or floor < EVASION_REDUCTION_START_FLOOR:
+        return evasion
+    reduction = min(EVASION_REDUCTION_MAX, EVASION_REDUCTION_PER_FLOOR * (floor - EVASION_REDUCTION_START_FLOOR))
+    return max(0.0, evasion * (1.0 - reduction))
 
 def _is_last_breath(player: Dict, floor: int) -> bool:
     max_hp = max(1, int(player.get("hp_max", 1)))
@@ -543,6 +580,7 @@ def build_boss(player: Dict) -> Dict:
         "armor": armor,
         "accuracy": accuracy,
         "evasion": evasion,
+        "always_hit": True,
         "bleed_turns": 0,
         "bleed_damage": 0,
         "burn_turns": 0,
@@ -586,6 +624,9 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
         "attack": max(1, attack),
         "armor": armor,
         "armor_pierce": armor_pierce,
+        "evasion_pierce": LATE_BOSS_EVASION_PIERCE,
+        "guaranteed_hit_every": LATE_BOSS_GUARANTEED_HIT_EVERY,
+        "guaranteed_hit_count": 0,
         "accuracy": accuracy,
         "evasion": evasion,
         "bleed_turns": 0,
@@ -594,7 +635,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
         "burn_damage": 0,
         "skip_turns": 0,
         "counted_dead": False,
-        "info": "Павший авантюрист, поднятый темной силой.",
+        "info": "Павший авантюрист, поднятый темной силой. Частично игнорирует уклонение. Каждый третий удар неизбежен.",
         "danger": "легендарная",
         "min_floor": floor,
         "max_floor": floor,
@@ -609,10 +650,10 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
     burst = max_hit * int(player.get("ap_max", 1)) * resolve_mult
 
     hp_base = max(player.get("hp_max", 0) * 4.5, burst * 3.0, 2000)
-    hp = int(hp_base * (1.0 + 0.2 * steps))
-    attack = int(max(player.get("hp_max", 0) * 0.45, 18) * (1.0 + 0.1 * steps))
+    hp = int(hp_base * (1.0 + 0.2 * steps) * DAUGHTER_BOSS_POWER_MULT)
+    attack = int(max(player.get("hp_max", 0) * 0.45, 18) * (1.0 + 0.1 * steps) * DAUGHTER_BOSS_POWER_MULT)
     armor_pierce = weapon.get("armor_pierce", 0.0)
-    armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce))
+    armor = max(4.0, avg_hit * 0.35 / max(0.2, 1.0 - armor_pierce)) * DAUGHTER_BOSS_POWER_MULT
     accuracy = _clamp(0.85 + 0.02 * steps, 0.8, 0.97)
     evasion = _clamp(0.1 + 0.015 * steps, 0.08, 0.28)
     armor_pierce = _enemy_armor_pierce_for_floor(floor)
@@ -627,6 +668,7 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
         "armor_pierce": armor_pierce,
         "accuracy": accuracy,
         "evasion": evasion,
+        "always_hit": True,
         "bleed_turns": 0,
         "bleed_damage": 0,
         "burn_turns": 0,
@@ -806,8 +848,9 @@ def _enemy_group_within_budget(enemies: List[Dict], budget: float) -> bool:
     total_attack = sum(enemy["attack"] for enemy in enemies)
     return total_attack <= budget
 
-def roll_hit(attacker_accuracy: float, defender_evasion: float) -> bool:
-    chance = _clamp(attacker_accuracy - defender_evasion, 0.15, 0.95)
+def roll_hit(attacker_accuracy: float, defender_evasion: float, floor: int | None = None) -> bool:
+    effective_evasion = _effective_evasion(defender_evasion, floor)
+    chance = _clamp(attacker_accuracy - effective_evasion, 0.15, 0.95)
     return random.random() < chance
 
 def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
@@ -859,7 +902,7 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
             player_evasion = player.get("evasion", 0.0)
             for enemy in alive:
                 hit_damage = _enemy_damage_to_player(enemy, player, floor)
-                hit_chance = _clamp(enemy.get("accuracy", 0.0) - player_evasion, 0.15, 0.95)
+                hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
                 total_expected += hit_damage * hit_chance
                 total_max += hit_damage
             total_display = max(1, int(round(total_expected)))
@@ -882,13 +925,26 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
             weapon = player.get("weapon", {})
             hit_damage = _enemy_damage_to_player(enemy, player, floor)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0)
-            enemy_evasion = enemy.get("evasion", 0.0)
+            enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
             if floor is not None and _is_last_breath(player, floor):
                 hit_chance = 1.0
             else:
                 hit_chance = _clamp(player_accuracy - enemy_evasion, 0.15, 0.95)
             hit_chance_pct = int(round(hit_chance * 100))
-            damage_text = f"<b>Урон противника:</b> {hit_damage} | <b>Шанс попадания по врагу:</b> {hit_chance_pct}%"
+            if _enemy_always_hits(enemy):
+                damage_text = (
+                    f"<b>Урон противника:</b> {hit_damage} | "
+                    "<b>Промах невозможен</b>"
+                )
+            else:
+                damage_text = (
+                    f"<b>Урон противника:</b> {hit_damage} | "
+                    f"<b>Шанс попадания по врагу:</b> {hit_chance_pct}%"
+                )
+            evasion_pierce = float(enemy.get("evasion_pierce", 0.0))
+            if evasion_pierce > 0:
+                pierce_pct = int(round(evasion_pierce * 100))
+                damage_text = f"{damage_text} | <b>Игнор уклонения:</b> {pierce_pct}%"
             armor_pierce = weapon.get("armor_pierce", 0.0)
             pierce_pct = int(round(armor_pierce * 100))
             if pierce_pct > 0:
@@ -941,7 +997,11 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         shadow_evaded = True
         hit = False
     else:
-        hit = True if last_breath else roll_hit(player["accuracy"] + weapon["accuracy_bonus"], target["evasion"])
+        hit = True if last_breath else roll_hit(
+            player["accuracy"] + weapon["accuracy_bonus"],
+            target["evasion"],
+            state.get("floor"),
+        )
     if hit:
         damage = roll_damage(weapon, player, target)
         target["hp"] -= damage
@@ -1068,7 +1128,18 @@ def enemy_phase(state: Dict) -> None:
             enemy["skip_turns"] -= 1
             _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
             continue
-        if roll_hit(enemy["accuracy"], player["evasion"]):
+        floor = state.get("floor")
+        guaranteed_every = _enemy_guaranteed_hit_every(enemy)
+        if guaranteed_every > 0:
+            counter = int(enemy.get("guaranteed_hit_count", 0)) + 1
+            enemy["guaranteed_hit_count"] = counter
+            if counter % guaranteed_every == 0:
+                hit = True
+            else:
+                hit = random.random() < _enemy_base_hit_chance(enemy, player["evasion"], floor)
+        else:
+            hit = random.random() < _enemy_base_hit_chance(enemy, player["evasion"], floor)
+        if hit:
             damage = _enemy_damage_to_player(enemy, player, state.get("floor", 1))
             player["hp"] -= damage
             total_damage += damage
@@ -1380,6 +1451,7 @@ def apply_treasure_choice(state: Dict, equip: bool) -> None:
         _append_log(state, "Награда сундука недоступна.")
         advance_floor(state)
         return
+    state["treasure_xp"] = state.get("treasure_xp", 0) + TREASURE_REWARD_XP
     if equip:
         apply_reward_item(state, reward)
     else:
@@ -1440,13 +1512,20 @@ def render_state(state: Dict) -> str:
     accuracy_value = 1.0 if last_breath_active else player["accuracy"]
     accuracy_display = "∞" if last_breath_active else _percent(accuracy_value, show_percent=False)
 
+    base_evasion = player.get("evasion", 0.0)
+    effective_evasion = _effective_evasion(base_evasion, state.get("floor"))
+    if effective_evasion != base_evasion:
+        evasion_text = f"{_percent(base_evasion)} (эфф. {_percent(effective_evasion)})"
+    else:
+        evasion_text = _percent(base_evasion)
+
     lines = [
         f"<b>Этаж:</b> {state['floor']}",
         f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
         f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
         (
             f"<b>Точность:</b> {accuracy_display} | "
-            f"<b>Уклонение:</b> {_percent(player['evasion'])} | "
+            f"<b>Уклонение:</b> {evasion_text} | "
             f"<b>Броня:</b> {int(round(player['armor']))} | "
             f"<b>Удача:</b> {_percent(player.get('luck', 0.0))}"
         ),
@@ -1459,6 +1538,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("На последнем издыхании — точность 100%")
     if state.get("cursed_ap_ratio"):
         status_notes.append("Проклятие — ОД 3/4")
+    if effective_evasion != base_evasion:
+        status_notes.append("Приглушение уклонения (50+ этаж)")
     if status_notes:
         lines.append(f"<b>Состояние:</b> <i>{' / '.join(status_notes)}</i>")
     lines.extend([

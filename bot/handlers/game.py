@@ -20,6 +20,7 @@ from bot.game.logic import (
     player_use_potion_by_id,
     player_use_scroll,
     render_state,
+    TREASURE_REWARD_XP,
     LATE_BOSS_NAME_FALLBACK,
 )
 from bot.keyboards import (
@@ -68,12 +69,19 @@ async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, st
 
 
 
-async def _ensure_fallen_boss_details(run_id: int, state: dict) -> None:
+async def _ensure_fallen_boss_details(
+    run_id: int,
+    state: dict,
+    exclude_telegram_id: int | None = None,
+) -> None:
     if state.get("phase") != "boss_prep" or state.get("boss_kind") != "fallen":
         return
     if state.get("boss_name") and state.get("boss_intro_lines"):
         return
-    boss_name = await db.get_random_boss_name(min_floor=10)
+    boss_name = await db.get_random_boss_name(
+        min_floor=10,
+        exclude_telegram_id=exclude_telegram_id,
+    )
     if not boss_name:
         boss_name = LATE_BOSS_NAME_FALLBACK
     state["boss_name"] = boss_name
@@ -89,6 +97,10 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
     total_kills = sum(kills.values())
     chests_opened = state.get("chests_opened", 0)
     treasures_found = state.get("treasures_found", 0)
+    treasure_xp = int(state.get("treasure_xp", 0))
+    if treasure_xp <= 0:
+        treasure_xp = int(treasures_found) * TREASURE_REWARD_XP
+    bonus_xp = total_kills + treasure_xp
     hp_max = int(player.get("hp_max", 0))
     ap_max = int(player.get("ap_max", 0))
     armor = int(round(player.get("armor", 0)))
@@ -105,6 +117,7 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
         f"<b>Убийств:</b> {total_kills}",
         f"<b>Сундуков открыто:</b> {chests_opened}",
         f"<b>Сокровищ найдено:</b> {treasures_found}",
+        f"<b>Бонусный опыт:</b> {bonus_xp} (убийства {total_kills}, сокровища {treasures_found} x {TREASURE_REWARD_XP})",
         "",
         (
             f"<b>Итоговые статы:</b> HP {hp_max} | ОД {ap_max} | "
@@ -135,7 +148,8 @@ def _battle_markup(state: dict):
 
 async def _send_state(callback: CallbackQuery, state: dict, run_id: int | None = None) -> None:
     if run_id is not None:
-        await _ensure_fallen_boss_details(run_id, state)
+        exclude_id = callback.from_user.id if callback.from_user else None
+        await _ensure_fallen_boss_details(run_id, state, exclude_telegram_id=exclude_id)
         if enforce_ap_cap(state):
             await db.update_run(run_id, state)
     text = render_state(state)

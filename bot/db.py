@@ -8,6 +8,10 @@ import aiosqlite
 DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
 PIONEER_BADGE_ID = "first_pioneer"
 PIONEER_BADGE_CUTOFF = "2026-01-01"
+SEASON0_KEY = "2025-12"
+SEASON0_START = "2025-12-20"
+SEASON0_BACKFILL_SETTING = "season0_backfill_done"
+TREASURE_REWARD_XP = 10
 
 
 async def init_db() -> None:
@@ -19,6 +23,7 @@ async def init_db() -> None:
                 telegram_id INTEGER UNIQUE NOT NULL,
                 username TEXT,
                 max_floor INTEGER DEFAULT 0,
+                xp INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -53,6 +58,11 @@ async def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS seasons (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 season_key TEXT UNIQUE NOT NULL,
@@ -83,9 +93,21 @@ async def init_db() -> None:
                 PRIMARY KEY (user_id, badge_id),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS season_history (
+                season_id INTEGER PRIMARY KEY,
+                season_number INTEGER NOT NULL,
+                season_key TEXT NOT NULL,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                winners_json TEXT DEFAULT "{}",
+                summary_json TEXT DEFAULT "{}",
+                FOREIGN KEY(season_id) REFERENCES seasons(id)
+            );
             """
         )
         await _ensure_user_columns(db)
+        await _ensure_user_season_columns(db)
+        await _backfill_season0_stats(db)
         await db.execute(
             "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
             "SELECT id, ?, 1, NULL FROM users WHERE DATE(created_at) < DATE(?)",
@@ -102,6 +124,105 @@ async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
         await db.commit()
 
 
+async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(user_season_stats)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "xp_gained" not in columns:
+        await db.execute("ALTER TABLE user_season_stats ADD COLUMN xp_gained INTEGER DEFAULT 0")
+        await db.commit()
+
+
+async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (SEASON0_BACKFILL_SETTING,))
+    row = await cursor.fetchone()
+    if row and row[0] == "1":
+        return
+
+    cursor = await db.execute("SELECT id FROM seasons WHERE season_key = ?", (SEASON0_KEY,))
+    row = await cursor.fetchone()
+    if row:
+        season_id = int(row[0])
+    else:
+        cursor = await db.execute(
+            "INSERT INTO seasons (season_key, started_at) VALUES (?, ?)",
+            (SEASON0_KEY, SEASON0_START),
+        )
+        season_id = int(cursor.lastrowid)
+
+    cursor = await db.execute(
+        "SELECT user_id, state_json, max_floor FROM runs "
+        "WHERE is_active = 0 AND started_at >= ?",
+        (SEASON0_START,),
+    )
+    rows = await cursor.fetchall()
+    if not rows:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (SEASON0_BACKFILL_SETTING, "1"),
+        )
+        await db.commit()
+        return
+
+    aggregates: Dict[int, Dict[str, Any]] = {}
+    for user_id, state_json, max_floor in rows:
+        agg = aggregates.setdefault(
+            user_id,
+            {
+                "max_floor": 0,
+                "total_runs": 0,
+                "kills": {},
+                "treasures_found": 0,
+                "chests_opened": 0,
+                "xp_gained": 0,
+            },
+        )
+        agg["total_runs"] += 1
+        state = {}
+        if state_json:
+            try:
+                state = json.loads(state_json)
+            except json.JSONDecodeError:
+                state = {}
+        floor_value = int(state.get("floor", 0) or max_floor or 0)
+        agg["max_floor"] = max(agg["max_floor"], floor_value)
+        agg["treasures_found"] += int(state.get("treasures_found", 0))
+        agg["chests_opened"] += int(state.get("chests_opened", 0))
+        treasure_xp = int(state.get("treasure_xp", 0))
+        if treasure_xp <= 0:
+            treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
+        kills_xp = sum((state.get("kills") or {}).values())
+        agg["xp_gained"] += max(0, floor_value) + treasure_xp + kills_xp
+        for enemy_id, count in (state.get("kills", {}) or {}).items():
+            agg["kills"][enemy_id] = agg["kills"].get(enemy_id, 0) + int(count)
+
+    for user_id, data in aggregates.items():
+        await db.execute(
+            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+            (user_id, season_id),
+        )
+        await db.execute(
+            "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
+            "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE user_id = ? AND season_id = ?",
+            (
+                data["max_floor"],
+                data["total_runs"],
+                json.dumps(data["kills"]),
+                data["treasures_found"],
+                data["chests_opened"],
+                data["xp_gained"],
+                user_id,
+                season_id,
+            ),
+        )
+
+    await db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (SEASON0_BACKFILL_SETTING, "1"),
+    )
+    await db.commit()
+
+
 def _current_season_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
@@ -109,26 +230,73 @@ def _current_season_key() -> str:
 async def get_or_create_current_season() -> Tuple[int, str, Optional[Tuple[int, str]]]:
     season_key = _current_season_key()
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id FROM seasons WHERE season_key = ?", (season_key,))
-        row = await cursor.fetchone()
-        if row:
-            return row[0], season_key, None
         cursor = await db.execute(
             "SELECT id, season_key FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
         )
-        prev = await cursor.fetchone()
-        if prev:
-            await db.execute(
-                "UPDATE seasons SET ended_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (prev[0],),
-            )
+        active = await cursor.fetchone()
+        if active:
+            return active[0], active[1], None
+        cursor = await db.execute("INSERT INTO seasons (season_key) VALUES (?)", (season_key,))
+        await db.commit()
+        return cursor.lastrowid, season_key, None
+
+
+async def get_active_season() -> Optional[Tuple[int, str]]:
+    async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO seasons (season_key) VALUES (?)",
+            "SELECT id, season_key FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row[0], row[1]
+
+
+async def get_season_by_key(season_key: str) -> Optional[Tuple[int, str]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, season_key FROM seasons WHERE season_key = ?",
+            (season_key,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row[0], row[1]
+
+
+async def close_season(season_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE seasons SET ended_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (season_id,),
+        )
+        await db.commit()
+
+
+async def reopen_season(season_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE seasons SET ended_at = NULL WHERE id = ?",
+            (season_id,),
+        )
+        await db.commit()
+
+
+async def create_season(season_key: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO seasons (season_key) VALUES (?)",
             (season_key,),
         )
         await db.commit()
-        prev_info = (prev[0], prev[1]) if prev else None
-        return cursor.lastrowid, season_key, prev_info
+        if cursor.lastrowid:
+            return int(cursor.lastrowid)
+        cursor = await db.execute(
+            "SELECT id FROM seasons WHERE season_key = ?",
+            (season_key,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
 
 async def get_last_season(ended_only: bool = False) -> Optional[Tuple[int, str]]:
@@ -146,6 +314,36 @@ async def get_last_season(ended_only: bool = False) -> Optional[Tuple[int, str]]
         if not row:
             return None
         return row[0], row[1]
+
+
+async def save_season_history(
+    season_id: int,
+    season_number: int,
+    season_key: str,
+    winners_json: str,
+    summary_json: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO season_history "
+            "(season_id, season_number, season_key, processed_at, winners_json, summary_json) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?)",
+            (season_id, season_number, season_key, winners_json, summary_json),
+        )
+        await db.commit()
+
+
+async def get_season_history(season_number: int) -> Optional[Tuple[int, str, str, str]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT season_id, season_key, winners_json, summary_json "
+            "FROM season_history WHERE season_number = ?",
+            (season_number,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row[0], row[1], row[2], row[3]
 
 
 async def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
@@ -179,7 +377,7 @@ async def add_user_xp(user_id: int, amount: int) -> None:
 async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
             (user_id, season_id),
         )
@@ -191,14 +389,16 @@ async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:
                 "kills": {},
                 "treasures_found": 0,
                 "chests_opened": 0,
+                "xp_gained": 0,
             }
-        max_floor, total_runs, kills_json, treasures_found, chests_opened = row
+        max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained = row
         return {
             "max_floor": max_floor or 0,
             "total_runs": total_runs or 0,
             "kills": json.loads(kills_json or "{}"),
             "treasures_found": treasures_found or 0,
             "chests_opened": chests_opened or 0,
+            "xp_gained": xp_gained or 0,
         }
 
 
@@ -213,25 +413,34 @@ async def record_season_stats(
             (user_id, season_id),
         )
         cursor = await db.execute(
-            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
             (user_id, season_id),
         )
         row = await cursor.fetchone()
-        max_floor, total_runs, kills_json, treasures_found, chests_opened = row or (0, 0, "{}", 0, 0)
+        max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained = row or (
+            0,
+            0,
+            "{}",
+            0,
+            0,
+            0,
+        )
 
         max_floor = max(max_floor or 0, int(state.get("floor", 0)))
         total_runs = (total_runs or 0) + 1
         kills = json.loads(kills_json or "{}")
         treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
         chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
+        xp_bonus = int(state.get("xp_bonus", 0))
+        xp_gained = (xp_gained or 0) + int(state.get("floor", 0)) + xp_bonus
 
         for enemy_id, count in (state.get("kills", {}) or {}).items():
             kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
 
         await db.execute(
             "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
-            "treasures_found = ?, chests_opened = ?, updated_at = CURRENT_TIMESTAMP "
+            "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
             (
                 max_floor,
@@ -239,6 +448,7 @@ async def record_season_stats(
                 json.dumps(kills),
                 treasures_found,
                 chests_opened,
+                xp_gained,
                 user_id,
                 season_id,
             ),
@@ -259,7 +469,7 @@ async def get_season_leaderboard_total(season_id: int) -> int:
 async def get_season_leaderboard_page(season_id: int, limit: int, offset: int) -> List[Tuple]:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT users.username, user_season_stats.max_floor "
+            "SELECT users.username, user_season_stats.max_floor, users.xp "
             "FROM user_season_stats "
             "JOIN users ON users.id = user_season_stats.user_id "
             "WHERE user_season_stats.season_id = ? "
@@ -286,14 +496,14 @@ async def get_user_season_rank(user_id: int, season_id: int) -> Optional[int]:
 async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "SELECT user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE season_id = ?",
             (season_id,),
         )
         rows = await cursor.fetchall()
         results = []
         for row in rows:
-            user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened = row
+            user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained = row
             results.append(
                 {
                     "user_id": user_id,
@@ -302,9 +512,65 @@ async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
                     "kills": json.loads(kills_json or "{}"),
                     "treasures_found": treasures_found or 0,
                     "chests_opened": chests_opened or 0,
+                    "xp_gained": xp_gained or 0,
                 }
             )
         return results
+
+
+async def get_season_player_rows(season_id: int) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT users.id, users.telegram_id, users.username, "
+            "user_season_stats.max_floor, user_season_stats.total_runs, "
+            "user_season_stats.kills_json, user_season_stats.treasures_found, "
+            "user_season_stats.chests_opened, user_season_stats.xp_gained "
+            "FROM user_season_stats "
+            "JOIN users ON users.id = user_season_stats.user_id "
+            "WHERE user_season_stats.season_id = ?",
+            (season_id,),
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            (
+                user_id,
+                telegram_id,
+                username,
+                max_floor,
+                total_runs,
+                kills_json,
+                treasures_found,
+                chests_opened,
+                xp_gained,
+            ) = row
+            results.append(
+                {
+                    "user_id": user_id,
+                    "telegram_id": telegram_id,
+                    "username": username,
+                    "max_floor": max_floor or 0,
+                    "total_runs": total_runs or 0,
+                    "kills": json.loads(kills_json or "{}"),
+                    "treasures_found": treasures_found or 0,
+                    "chests_opened": chests_opened or 0,
+                    "xp_gained": xp_gained or 0,
+                }
+            )
+        return results
+
+
+async def get_users_by_ids(user_ids: List[int]) -> Dict[int, Tuple[Optional[str], int]]:
+    if not user_ids:
+        return {}
+    placeholders = ",".join("?" for _ in user_ids)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"SELECT id, username, telegram_id FROM users WHERE id IN ({placeholders})",
+            tuple(user_ids),
+        )
+        rows = await cursor.fetchall()
+        return {user_id: (username, telegram_id) for user_id, username, telegram_id in rows}
 
 
 async def get_user_badges(user_id: int) -> List[Dict[str, Any]]:
@@ -599,6 +865,23 @@ async def get_all_user_targets() -> List[Tuple[int, int]]:
         return await cursor.fetchall()
 
 
+async def get_setting(key: str) -> Optional[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
 async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -712,13 +995,29 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
             "broadcast_pending": broadcast_pending,
         }
 
-async def get_random_boss_name(min_floor: int = 10) -> Optional[str]:
+async def get_random_boss_name(
+    min_floor: int = 10,
+    exclude_telegram_id: int | None = None,
+) -> Optional[str]:
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT username FROM users "
-            "WHERE username IS NOT NULL AND TRIM(username) != '' AND max_floor >= ? "
-            "ORDER BY RANDOM() LIMIT 1",
-            (min_floor,),
-        )
+        if exclude_telegram_id is None:
+            cursor = await db.execute(
+                "SELECT username FROM users "
+                "WHERE username IS NOT NULL AND TRIM(username) != '' "
+                "AND LOWER(TRIM(username)) != 'без имени' "
+                "AND max_floor >= ? "
+                "ORDER BY RANDOM() LIMIT 1",
+                (min_floor,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT username FROM users "
+                "WHERE username IS NOT NULL AND TRIM(username) != '' "
+                "AND LOWER(TRIM(username)) != 'без имени' "
+                "AND max_floor >= ? "
+                "AND telegram_id != ? "
+                "ORDER BY RANDOM() LIMIT 1",
+                (min_floor, exclude_telegram_id),
+            )
         row = await cursor.fetchone()
         return row[0] if row else None

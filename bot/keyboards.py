@@ -120,7 +120,8 @@ def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
 def admin_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Обновить", callback_data="menu:admin:refresh")
-    builder.button(text="Пересчитать значки сезона", callback_data="menu:admin:season_badges")
+    builder.button(text="Пересчитать награды сезона", callback_data="menu:admin:season_badges")
+    builder.button(text="Завершить сезон", callback_data="menu:admin:season_end")
     builder.button(text="Падение сервера", callback_data="menu:admin:crash")
     builder.button(text="Меню", callback_data="menu:main")
     builder.adjust(1)
@@ -130,6 +131,22 @@ def admin_crash_confirm_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Отправить", callback_data="menu:admin:crash:confirm")
     builder.button(text="Отмена", callback_data="menu:admin:crash:cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def admin_end_season_confirm_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Завершить сезон", callback_data="menu:admin:season_end:confirm")
+    builder.button(text="Отмена", callback_data="menu:admin:season_end:cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def admin_end_season_remind_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Отправить напоминание", callback_data="menu:admin:season_end:remind")
+    builder.button(text="Отмена", callback_data="menu:admin:season_end:cancel")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -143,7 +160,7 @@ def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
 
 def rules_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="О значках", callback_data="rules:badges")
+    builder.button(text="О наградах", callback_data="rules:badges")
     builder.button(text="О сезонах", callback_data="rules:seasons")
     builder.button(text="Оружие", callback_data="rules:weapons")
     builder.button(text="Противники", callback_data="rules:enemies")

@@ -1,5 +1,8 @@
 import asyncio
+import json
+from html import escape
 from pathlib import Path
+from typing import List
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -11,6 +14,15 @@ from bot.config import get_admin_ids
 from bot.db import get_all_user_targets, get_broadcast_targets, mark_broadcast_sent
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import broadcast_menu_kb, main_menu_kb
+from bot.progress import (
+    BADGES,
+    SUMMARY_BADGES,
+    award_season_badges,
+    compute_season_winners,
+    season_key_for_number,
+    season_label,
+    season_month_label,
+)
 
 router = Router()
 
@@ -36,9 +48,9 @@ SEASON_UPDATE_TEXT = (
     "<b>Season Update: руины вспоминают героев</b>\n"
     "Добавлен сезонный прогресс и личный кабинет героя.\n"
     "- Ежемесячные сезоны сбрасывают рейтинговую таблицу 1-го числа.\n"
-    "- Сезонные значки за топовые места в рейтинге,а также (убийства, сундуки, сокровища).\n"
+    "- Сезонные награды за топовые места в рейтинге, а также (убийства, сундуки, сокровища).\n"
     "- Опыт за забеги и награды, уровни и прогресс-бар.\n"
-    "- Личный кабинет с вашей историей, статистикой и коллекцией значков.\n"
+    "- Личный кабинет с вашей историей, статистикой и коллекцией наград.\n"
     "- Расширенные правила и справки по механикам.\n\n"
     "<i>Сезон открыт. Время вернуть себе имя в руинах.</i>"
 )
@@ -198,6 +210,131 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
         await asyncio.sleep(0.05)
 
     return sent, failed, len(targets)
+
+
+async def send_season_summary_broadcast(
+    bot,
+    season_number: int,
+    recalc: bool,
+) -> tuple[int, int, int]:
+    season_key = season_key_for_number(season_number)
+    season = await db.get_season_by_key(season_key)
+    if not season:
+        return 0, 0, 0
+    season_id = season[0]
+
+    if recalc:
+        await award_season_badges(season_id, season_key)
+
+    rows = await db.get_season_stats_rows(season_id)
+    if not rows:
+        return 0, 0, 0
+
+    winners = compute_season_winners(rows)
+    summary = {"players": len(rows)}
+    await db.save_season_history(
+        season_id,
+        season_number,
+        season_key,
+        json.dumps(winners, ensure_ascii=False),
+        json.dumps(summary, ensure_ascii=False),
+    )
+
+    winner_ids: List[int] = []
+    for badge_id in SUMMARY_BADGES:
+        winner_ids.extend(winners.get(badge_id, []))
+    winner_map = await db.get_users_by_ids(sorted(set(winner_ids)))
+
+    winners_lines = []
+    for badge_id in SUMMARY_BADGES:
+        badge = BADGES.get(badge_id)
+        if not badge:
+            continue
+        names = []
+        for user_id in winners.get(badge_id, []):
+            username = winner_map.get(user_id, (None, 0))[0]
+            names.append(escape(username) if username else "Без имени")
+        names_text = ", ".join(names) if names else "—"
+        winners_lines.append(f"• Знак \"{badge.name}\": {names_text}")
+
+    player_rows = await db.get_season_player_rows(season_id)
+    active_rows = [
+        row
+        for row in player_rows
+        if row.get("total_runs", 0) > 0 or row.get("max_floor", 0) > 0
+    ]
+    if not active_rows:
+        return 0, 0, 0
+
+    ranked = sorted(active_rows, key=lambda item: (-int(item.get("max_floor", 0)), item["user_id"]))
+    ranks = {row["user_id"]: idx for idx, row in enumerate(ranked, start=1)}
+
+    sent = 0
+    failed = 0
+    total = len(active_rows)
+    season_title = f"{season_label(season_key)} ({season_month_label(season_key)})"
+
+    for row in active_rows:
+        user_id = row["user_id"]
+        telegram_id = row["telegram_id"]
+        if not telegram_id:
+            continue
+
+        total_kills = sum((row.get("kills") or {}).values())
+        rank = ranks.get(user_id)
+
+        badge_rows = await db.get_user_badges(user_id)
+        earned = []
+        badge_xp = 0
+        for entry in badge_rows:
+            badge_id = entry.get("badge_id")
+            if entry.get("last_awarded_season") != season_key:
+                continue
+            badge = BADGES.get(badge_id)
+            if not badge or not badge.seasonal:
+                continue
+            earned.append(f"- {badge.name} (+{badge.xp} XP)")
+            badge_xp += badge.xp
+        if not earned:
+            earned = ["- Нет наград"]
+
+        season_xp = int(row.get("xp_gained", 0)) + badge_xp
+        lines = [
+            f"🏆 Итоги {season_title}!",
+            "Спасибо за вашу активность!",
+            "",
+            "Ваша личная статистика:",
+            f"• Забегов сыграно: {row.get('total_runs', 0)}",
+            f"• Лучший этаж: {row.get('max_floor', 0)}",
+            f"• Убийств: {total_kills}",
+            f"• Место в рейтинге: {rank or '—'}",
+            f"• Набранный опыт: {season_xp} XP",
+            f"• Сундуков открыто: {row.get('chests_opened', 0)}",
+            f"• Сокровищ найдено: {row.get('treasures_found', 0)}",
+            "",
+            "Ваши награды сезона:",
+            *earned,
+            "",
+            f"🏅 Обладатели наград {season_label(season_key)}:",
+            *winners_lines,
+            "",
+            f"{season_label(season_key_for_number(season_number + 1))} уже начался! Удачи в боях!",
+        ]
+        try:
+            await bot.send_message(telegram_id, "\n".join(lines))
+            sent += 1
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await bot.send_message(telegram_id, "\n".join(lines))
+                sent += 1
+            except (TelegramForbiddenError, TelegramBadRequest):
+                failed += 1
+        except (TelegramForbiddenError, TelegramBadRequest):
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    return sent, failed, total
 
 
 @router.callback_query(F.data == "menu:broadcast")

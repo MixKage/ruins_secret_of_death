@@ -240,6 +240,27 @@
     ]
   },
   {
+    "id": "true_strike",
+    "name": "Слепой охотник",
+    "base_hp": 24,
+    "base_attack": 9,
+    "base_armor": 1,
+    "base_accuracy": 0.9,
+    "base_evasion": 0.1,
+    "hp_per_floor": 2.7,
+    "attack_per_floor": 1.6,
+    "armor_per_floor": 0.2,
+    "group_min": 1,
+    "group_max": 2,
+    "min_floor": 50,
+    "max_floor": 999,
+    "danger": "Мифическая",
+    "info": "Его удары слепы к уверткам — он целится в саму тень.",
+    "traits": [
+      "true_strike"
+    ]
+  },
+  {
     "id": "necromancer",
     "name": "Некромант",
     "base_hp": 70,

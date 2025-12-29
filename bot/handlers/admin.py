@@ -1,13 +1,27 @@
 from html import escape
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, Message
 
 from bot import db
-from bot.handlers.broadcast import BROADCAST_KEY, send_server_crash_broadcast
+from bot.handlers.broadcast import BROADCAST_KEY, send_season_summary_broadcast, send_server_crash_broadcast
 from bot.handlers.helpers import is_admin_user
-from bot.keyboards import admin_crash_confirm_kb, admin_kb
-from bot.progress import award_current_season_badges, award_latest_closed_season_badges, season_label
+from bot.keyboards import (
+    admin_crash_confirm_kb,
+    admin_end_season_confirm_kb,
+    admin_end_season_remind_kb,
+    admin_kb,
+)
+from bot.progress import (
+    advance_season_once,
+    award_current_season_badges,
+    award_latest_closed_season_badges,
+    expected_season_number,
+    get_last_processed_season,
+    season_label,
+    season_key_for_number,
+)
 from bot.utils.telegram import edit_or_send
 
 router = Router()
@@ -49,6 +63,26 @@ def _format_admin_panel(stats: dict) -> str:
     return "\n".join(lines)
 
 
+async def _build_season_end_prompt() -> tuple[str, object]:
+    last_processed = await get_last_processed_season()
+    expected = expected_season_number()
+    if expected > last_processed:
+        text = (
+            f"<b>Завершить {season_label(season_key_for_number(last_processed))}</b>\n"
+            f"Вы хотите завершить Сезон {last_processed} и начать Сезон {last_processed + 1}?\n"
+            "Будет выполнен финальный перерасчет и рассылка статистики.\n"
+            "Дата обновления соответствует календарю."
+        )
+        return text, admin_end_season_confirm_kb()
+    text = (
+        f"Текущий сезон ({last_processed}) уже актуален или новее ожидаемого "
+        f"по дате ({expected}). Повторное повышение невозможно.\n"
+        "Вы можете отправить игрокам напоминание с их статистикой за "
+        "последний завершенный сезон."
+    )
+    return text, admin_end_season_remind_kb()
+
+
 async def _show_admin_panel(callback: CallbackQuery) -> None:
     if not is_admin_user(callback.from_user):
         await callback.answer("Команда недоступна.", show_alert=True)
@@ -84,6 +118,73 @@ async def admin_season_badges(callback: CallbackQuery) -> None:
     else:
         season_key = await award_current_season_badges()
         await callback.answer(f"Пересчитано: {season_label(season_key)} (текущий)")
+    await _show_admin_panel(callback)
+
+
+@router.callback_query(F.data == "menu:admin:season_end")
+async def admin_season_end_prompt(callback: CallbackQuery) -> None:
+    if not is_admin_user(callback.from_user):
+        await callback.answer("Команда недоступна.", show_alert=True)
+        return
+    text, markup = await _build_season_end_prompt()
+    await edit_or_send(callback, text, reply_markup=markup)
+
+
+@router.message(Command("admin_end_season"))
+async def admin_end_season_command(message: Message) -> None:
+    if not is_admin_user(message.from_user):
+        await message.answer("Команда недоступна.")
+        return
+    text, markup = await _build_season_end_prompt()
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == "menu:admin:season_end:confirm")
+async def admin_season_end_confirm(callback: CallbackQuery) -> None:
+    if not is_admin_user(callback.from_user):
+        await callback.answer("Команда недоступна.", show_alert=True)
+        return
+    last_processed = await get_last_processed_season()
+    expected = expected_season_number()
+    if expected <= last_processed:
+        await callback.answer("Повышение сезона недоступно.", show_alert=True)
+        await admin_season_end_prompt(callback)
+        return
+    await callback.answer("Завершаю сезон...")
+    await advance_season_once()
+    closed_number = last_processed
+    sent, failed, total = await send_season_summary_broadcast(
+        callback.bot,
+        closed_number,
+        recalc=True,
+    )
+    text = (
+        f"Сезон {closed_number} завершен. Начат Сезон {closed_number + 1}.\n"
+        f"Рассылка итогов: {sent}/{total}, ошибок {failed}."
+    )
+    await edit_or_send(callback, text, reply_markup=admin_kb())
+
+
+@router.callback_query(F.data == "menu:admin:season_end:remind")
+async def admin_season_end_remind(callback: CallbackQuery) -> None:
+    if not is_admin_user(callback.from_user):
+        await callback.answer("Команда недоступна.", show_alert=True)
+        return
+    last_processed = await get_last_processed_season()
+    await callback.answer("Отправляю напоминание...")
+    sent, failed, total = await send_season_summary_broadcast(
+        callback.bot,
+        last_processed,
+        recalc=False,
+    )
+    text = (
+        f"Напоминание для Сезона {last_processed}: {sent}/{total}, ошибок {failed}."
+    )
+    await edit_or_send(callback, text, reply_markup=admin_kb())
+
+
+@router.callback_query(F.data == "menu:admin:season_end:cancel")
+async def admin_season_end_cancel(callback: CallbackQuery) -> None:
     await _show_admin_panel(callback)
 
 
