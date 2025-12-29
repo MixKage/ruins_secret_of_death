@@ -1056,6 +1056,19 @@ def check_battle_end(state: Dict) -> None:
 def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
 
+def _event_options_for_floor(floor: int) -> List[Dict]:
+    options = generate_event_options()
+    if floor < CURSED_FLOOR_MIN_FLOOR:
+        return options
+    for option in options:
+        if option.get("id") == "holy_spring":
+            option["effect"] = "Полностью восстанавливает здоровье + малое зелье"
+        elif option.get("id") == "treasure_chest":
+            option["effect"] = "Шанс на награду +2 этажа или свиток магии + малое и среднее зелье"
+        elif option.get("id") == "campfire":
+            option["effect"] = "+2-3 к макс. HP + малое и среднее зелье"
+    return options
+
 def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
     pool = _filter_chest_loot_for_player(_chest_loot_for_floor(floor), player, floor)
     if not pool:
@@ -1167,7 +1180,7 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
 
 def prepare_event(state: Dict) -> None:
     state["phase"] = "event"
-    state["event_options"] = generate_event_options()
+    state["event_options"] = _event_options_for_floor(state.get("floor", 1))
     state["treasure_reward"] = None
     state["boss_artifacts"] = []
     state["show_info"] = False
@@ -1191,9 +1204,16 @@ def apply_reward(state: Dict, reward_index: int) -> None:
 def apply_event_choice(state: Dict, event_id: str) -> None:
     player = state["player"]
     advance = True
+    late_floor = state.get("floor", 0) >= CURSED_FLOOR_MIN_FLOOR
     if event_id == "holy_spring":
         player["hp"] = player["hp_max"]
         _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
+        if late_floor:
+            added, dropped = _grant_small_potion(player)
+            if added:
+                _append_log(state, "Вы находите <b>малое зелье</b>.")
+            if dropped:
+                _append_log(state, "Нет места для зелий — находка сгорает.")
     elif event_id == "treasure_chest":
         state["chests_opened"] = state.get("chests_opened", 0) + 1
         chance = _clamp(player["luck"], 0.05, 0.7)
@@ -1209,20 +1229,34 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
             advance = False
         else:
             _append_log(state, "<i>Сундук пуст. Удача отвернулась.</i>")
+        dropped_any = False
         added, dropped = _grant_small_potion(player)
         if added:
             _append_log(state, "Вы находите <b>малое зелье</b>.")
-        if dropped:
+        dropped_any = dropped_any or dropped
+        if late_floor:
+            added, dropped = _grant_medium_potion(player, count=1)
+            if added:
+                _append_log(state, "Вы находите <b>среднее зелье</b>.")
+            dropped_any = dropped_any or dropped
+        if dropped_any:
             _append_log(state, "Нет места для зелий — находка сгорает.")
     elif event_id == "campfire":
         bonus = random.randint(2, 3)
         player["hp_max"] += bonus
         player["hp"] += bonus
         _append_log(state, f"Костер укрепляет вас: <b>+{bonus}</b> к макс. HP.")
+        dropped_any = False
         added, dropped = _grant_small_potion(player)
         if added:
             _append_log(state, "Вы находите <b>малое зелье</b>.")
-        if dropped:
+        dropped_any = dropped_any or dropped
+        if late_floor:
+            added, dropped = _grant_medium_potion(player, count=1)
+            if added:
+                _append_log(state, "Вы находите <b>среднее зелье</b>.")
+            dropped_any = dropped_any or dropped
+        if dropped_any:
             _append_log(state, "Нет места для зелий — находка сгорает.")
     else:
         _append_log(state, "Неверный выбор комнаты.")
