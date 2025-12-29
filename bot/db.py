@@ -1,4 +1,6 @@
+import asyncio
 import json
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +11,10 @@ import aiosqlite
 DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
 SQLITE_TIMEOUT = 5.0
 SQLITE_BUSY_TIMEOUT_MS = 5000
+SQLITE_WRITE_RETRIES = 3
+SQLITE_WRITE_RETRY_DELAY = 0.1
+WRITE_SQL_PREFIXES = ("insert", "update", "delete", "replace", "create", "drop", "alter")
+_WRITE_LOCK = asyncio.Lock()
 PIONEER_BADGE_ID = "first_pioneer"
 PIONEER_BADGE_CUTOFF = "2026-01-01"
 SEASON0_KEY = "2025-12"
@@ -20,17 +26,62 @@ TREASURE_REWARD_XP = 10
 @asynccontextmanager
 async def _connect() -> aiosqlite.Connection:
     db = await aiosqlite.connect(DB_PATH, timeout=SQLITE_TIMEOUT)
-    await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    await _execute(db, "PRAGMA journal_mode=WAL")
+    await _execute(db, f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     try:
         yield db
     finally:
         await db.close()
 
 
+def _is_write(sql: str) -> bool:
+    return sql.lstrip().lower().startswith(WRITE_SQL_PREFIXES)
+
+
+async def _execute(db: aiosqlite.Connection, sql: str, params: tuple = ()):
+    if not _is_write(sql):
+        return await db.execute(sql, params)
+    async with _WRITE_LOCK:
+        return await _execute_with_retry(db, sql, params)
+
+
+async def _executemany(db: aiosqlite.Connection, sql: str, seq_of_params):
+    if not _is_write(sql):
+        return await db.executemany(sql, seq_of_params)
+    async with _WRITE_LOCK:
+        return await _execute_with_retry(db, sql, seq_of_params, many=True)
+
+
+async def _executescript(db: aiosqlite.Connection, script: str):
+    async with _WRITE_LOCK:
+        return await _execute_with_retry(db, script, (), script=True)
+
+
+async def _execute_with_retry(
+    db: aiosqlite.Connection,
+    sql: str,
+    params,
+    many: bool = False,
+    script: bool = False,
+):
+    for attempt in range(SQLITE_WRITE_RETRIES):
+        try:
+            if script:
+                return await db.executescript(sql)
+            if many:
+                return await db.executemany(sql, params)
+            return await db.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
+            if attempt >= SQLITE_WRITE_RETRIES - 1:
+                raise
+            await asyncio.sleep(SQLITE_WRITE_RETRY_DELAY * (2**attempt))
+
+
 async def init_db() -> None:
     async with _connect() as db:
-        await db.executescript(
+        await _executescript(db, 
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +173,7 @@ async def init_db() -> None:
         await _ensure_user_columns(db)
         await _ensure_user_season_columns(db)
         await _backfill_season0_stats(db)
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
             "SELECT id, ?, 1, NULL FROM users WHERE DATE(created_at) < DATE(?)",
             (PIONEER_BADGE_ID, PIONEER_BADGE_CUTOFF),
@@ -131,46 +182,46 @@ async def init_db() -> None:
 
 
 async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
-    cursor = await db.execute("PRAGMA table_info(users)")
+    cursor = await _execute(db, "PRAGMA table_info(users)")
     columns = {row[1] for row in await cursor.fetchall()}
     if "xp" not in columns:
-        await db.execute("ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0")
+        await _execute(db, "ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0")
         await db.commit()
 
 
 async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
-    cursor = await db.execute("PRAGMA table_info(user_season_stats)")
+    cursor = await _execute(db, "PRAGMA table_info(user_season_stats)")
     columns = {row[1] for row in await cursor.fetchall()}
     if "xp_gained" not in columns:
-        await db.execute("ALTER TABLE user_season_stats ADD COLUMN xp_gained INTEGER DEFAULT 0")
+        await _execute(db, "ALTER TABLE user_season_stats ADD COLUMN xp_gained INTEGER DEFAULT 0")
         await db.commit()
 
 
 async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
-    cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (SEASON0_BACKFILL_SETTING,))
+    cursor = await _execute(db, "SELECT value FROM settings WHERE key = ?", (SEASON0_BACKFILL_SETTING,))
     row = await cursor.fetchone()
     if row and row[0] == "1":
         return
 
-    cursor = await db.execute("SELECT id FROM seasons WHERE season_key = ?", (SEASON0_KEY,))
+    cursor = await _execute(db, "SELECT id FROM seasons WHERE season_key = ?", (SEASON0_KEY,))
     row = await cursor.fetchone()
     if row:
         season_id = int(row[0])
     else:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "INSERT INTO seasons (season_key, started_at) VALUES (?, ?)",
             (SEASON0_KEY, SEASON0_START),
         )
         season_id = int(cursor.lastrowid)
 
-    cursor = await db.execute(
+    cursor = await _execute(db, 
         "SELECT user_id, state_json, max_floor FROM runs "
         "WHERE is_active = 0 AND started_at >= ?",
         (SEASON0_START,),
     )
     rows = await cursor.fetchall()
     if not rows:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             (SEASON0_BACKFILL_SETTING, "1"),
         )
@@ -210,11 +261,11 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             agg["kills"][enemy_id] = agg["kills"].get(enemy_id, 0) + int(count)
 
     for user_id, data in aggregates.items():
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
             (user_id, season_id),
         )
-        await db.execute(
+        await _execute(db, 
             "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
             "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
@@ -230,7 +281,7 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             ),
         )
 
-    await db.execute(
+    await _execute(db, 
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
         (SEASON0_BACKFILL_SETTING, "1"),
     )
@@ -244,20 +295,20 @@ def _current_season_key() -> str:
 async def get_or_create_current_season() -> Tuple[int, str, Optional[Tuple[int, str]]]:
     season_key = _current_season_key()
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, season_key FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
         )
         active = await cursor.fetchone()
         if active:
             return active[0], active[1], None
-        cursor = await db.execute("INSERT INTO seasons (season_key) VALUES (?)", (season_key,))
+        cursor = await _execute(db, "INSERT INTO seasons (season_key) VALUES (?)", (season_key,))
         await db.commit()
         return cursor.lastrowid, season_key, None
 
 
 async def get_active_season() -> Optional[Tuple[int, str]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, season_key FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
         )
         row = await cursor.fetchone()
@@ -268,7 +319,7 @@ async def get_active_season() -> Optional[Tuple[int, str]]:
 
 async def get_season_by_key(season_key: str) -> Optional[Tuple[int, str]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, season_key FROM seasons WHERE season_key = ?",
             (season_key,),
         )
@@ -280,7 +331,7 @@ async def get_season_by_key(season_key: str) -> Optional[Tuple[int, str]]:
 
 async def close_season(season_id: int) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE seasons SET ended_at = CURRENT_TIMESTAMP WHERE id = ?",
             (season_id,),
         )
@@ -289,7 +340,7 @@ async def close_season(season_id: int) -> None:
 
 async def reopen_season(season_id: int) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE seasons SET ended_at = NULL WHERE id = ?",
             (season_id,),
         )
@@ -298,14 +349,14 @@ async def reopen_season(season_id: int) -> None:
 
 async def create_season(season_key: str) -> int:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "INSERT OR IGNORE INTO seasons (season_key) VALUES (?)",
             (season_key,),
         )
         await db.commit()
         if cursor.lastrowid:
             return int(cursor.lastrowid)
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id FROM seasons WHERE season_key = ?",
             (season_key,),
         )
@@ -316,12 +367,12 @@ async def create_season(season_key: str) -> int:
 async def get_last_season(ended_only: bool = False) -> Optional[Tuple[int, str]]:
     async with _connect() as db:
         if ended_only:
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 "SELECT id, season_key FROM seasons "
                 "WHERE ended_at IS NOT NULL ORDER BY started_at DESC LIMIT 1"
             )
         else:
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 "SELECT id, season_key FROM seasons ORDER BY started_at DESC LIMIT 1"
             )
         row = await cursor.fetchone()
@@ -338,7 +389,7 @@ async def save_season_history(
     summary_json: str,
 ) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR REPLACE INTO season_history "
             "(season_id, season_number, season_key, processed_at, winners_json, summary_json) "
             "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?)",
@@ -349,7 +400,7 @@ async def save_season_history(
 
 async def get_season_history(season_number: int) -> Optional[Tuple[int, str, str, str]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT season_id, season_key, winners_json, summary_json "
             "FROM season_history WHERE season_number = ?",
             (season_number,),
@@ -362,7 +413,7 @@ async def get_season_history(season_number: int) -> Optional[Tuple[int, str, str
 
 async def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT username, xp, created_at FROM users WHERE id = ?",
             (user_id,),
         )
@@ -381,7 +432,7 @@ async def add_user_xp(user_id: int, amount: int) -> None:
     if amount <= 0:
         return
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE users SET xp = COALESCE(xp, 0) + ? WHERE id = ?",
             (amount, user_id),
         )
@@ -390,7 +441,7 @@ async def add_user_xp(user_id: int, amount: int) -> None:
 
 async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
             (user_id, season_id),
@@ -422,11 +473,11 @@ async def record_season_stats(
     state: Dict[str, Any],
 ) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
             (user_id, season_id),
         )
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
             (user_id, season_id),
@@ -452,7 +503,7 @@ async def record_season_stats(
         for enemy_id, count in (state.get("kills", {}) or {}).items():
             kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
 
-        await db.execute(
+        await _execute(db, 
             "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
             "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
@@ -472,7 +523,7 @@ async def record_season_stats(
 
 async def get_season_leaderboard_total(season_id: int) -> int:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT COUNT(*) FROM user_season_stats WHERE season_id = ? AND max_floor > 0",
             (season_id,),
         )
@@ -482,7 +533,7 @@ async def get_season_leaderboard_total(season_id: int) -> int:
 
 async def get_season_leaderboard_page(season_id: int, limit: int, offset: int) -> List[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT users.username, user_season_stats.max_floor, users.xp "
             "FROM user_season_stats "
             "JOIN users ON users.id = user_season_stats.user_id "
@@ -496,7 +547,7 @@ async def get_season_leaderboard_page(season_id: int, limit: int, offset: int) -
 
 async def get_user_season_rank(user_id: int, season_id: int) -> Optional[int]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT rank FROM ("
             "SELECT user_id, ROW_NUMBER() OVER (ORDER BY max_floor DESC, user_id ASC) AS rank "
             "FROM user_season_stats WHERE season_id = ? AND max_floor > 0"
@@ -509,7 +560,7 @@ async def get_user_season_rank(user_id: int, season_id: int) -> Optional[int]:
 
 async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE season_id = ?",
             (season_id,),
@@ -534,7 +585,7 @@ async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
 
 async def get_season_player_rows(season_id: int) -> List[Dict[str, Any]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT users.id, users.telegram_id, users.username, "
             "user_season_stats.max_floor, user_season_stats.total_runs, "
             "user_season_stats.kills_json, user_season_stats.treasures_found, "
@@ -579,7 +630,7 @@ async def get_users_by_ids(user_ids: List[int]) -> Dict[int, Tuple[Optional[str]
         return {}
     placeholders = ",".join("?" for _ in user_ids)
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             f"SELECT id, username, telegram_id FROM users WHERE id IN ({placeholders})",
             tuple(user_ids),
         )
@@ -589,7 +640,7 @@ async def get_users_by_ids(user_ids: List[int]) -> Dict[int, Tuple[Optional[str]
 
 async def get_user_badges(user_id: int) -> List[Dict[str, Any]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT badge_id, count, last_awarded_season FROM user_badges WHERE user_id = ?",
             (user_id,),
         )
@@ -606,7 +657,7 @@ async def award_badge(
     season_key: Optional[str] = None,
 ) -> bool:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT count, last_awarded_season FROM user_badges WHERE user_id = ? AND badge_id = ?",
             (user_id, badge_id),
         )
@@ -616,13 +667,13 @@ async def award_badge(
             if season_key and last_awarded_season == season_key:
                 return False
             new_count = (count or 0) + 1
-            await db.execute(
+            await _execute(db, 
                 "UPDATE user_badges SET count = ?, last_awarded_season = ?, "
                 "last_awarded_at = CURRENT_TIMESTAMP WHERE user_id = ? AND badge_id = ?",
                 (new_count, season_key, user_id, badge_id),
             )
         else:
-            await db.execute(
+            await _execute(db, 
                 "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
                 "VALUES (?, ?, 1, ?)",
                 (user_id, badge_id, season_key),
@@ -634,29 +685,29 @@ async def award_badge(
 
 async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO users (telegram_id, username) VALUES (?, ?)",
             (telegram_id, username),
         )
-        await db.execute(
+        await _execute(db, 
             "UPDATE users SET username = ? WHERE telegram_id = ?",
             (username, telegram_id),
         )
         await db.commit()
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id FROM users WHERE telegram_id = ?",
             (telegram_id,),
         )
         row = await cursor.fetchone()
         user_id = row[0]
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT created_at FROM users WHERE id = ?",
             (user_id,),
         )
         created_row = await cursor.fetchone()
         created_at = created_row[0] if created_row else None
         if created_at:
-            await db.execute(
+            await _execute(db, 
                 "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
                 "SELECT ?, ?, 1, NULL WHERE DATE(?) < DATE(?)",
                 (user_id, PIONEER_BADGE_ID, created_at, PIONEER_BADGE_CUTOFF),
@@ -667,7 +718,7 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
 
 async def get_user(user_id: int) -> Optional[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, telegram_id, username, max_floor FROM users WHERE id = ?",
             (user_id,),
         )
@@ -676,7 +727,7 @@ async def get_user(user_id: int) -> Optional[Tuple]:
 
 async def get_user_by_telegram(telegram_id: int) -> Optional[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, telegram_id, username, max_floor FROM users WHERE telegram_id = ?",
             (telegram_id,),
         )
@@ -685,7 +736,7 @@ async def get_user_by_telegram(telegram_id: int) -> Optional[Tuple]:
 
 async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, state_json FROM runs WHERE user_id = ? AND is_active = 1 ORDER BY started_at DESC LIMIT 1",
             (user_id,),
         )
@@ -698,7 +749,7 @@ async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
 
 async def create_run(user_id: int, state: Dict[str, Any]) -> int:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "INSERT INTO runs (user_id, state_json, max_floor, is_active) VALUES (?, ?, ?, 1)",
             (user_id, json.dumps(state), state.get("floor", 0)),
         )
@@ -708,7 +759,7 @@ async def create_run(user_id: int, state: Dict[str, Any]) -> int:
 
 async def update_run(run_id: int, state: Dict[str, Any]) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE runs SET state_json = ?, max_floor = ? WHERE id = ?",
             (json.dumps(state), state.get("floor", 0), run_id),
         )
@@ -717,7 +768,7 @@ async def update_run(run_id: int, state: Dict[str, Any]) -> None:
 
 async def finish_run(run_id: int, final_floor: int) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE runs SET is_active = 0, ended_at = CURRENT_TIMESTAMP, max_floor = ? WHERE id = ?",
             (final_floor, run_id),
         )
@@ -726,7 +777,7 @@ async def finish_run(run_id: int, final_floor: int) -> None:
 
 async def update_user_max_floor(user_id: int, floor: int) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "UPDATE users SET max_floor = MAX(max_floor, ?) WHERE id = ?",
             (floor, user_id),
         )
@@ -735,7 +786,7 @@ async def update_user_max_floor(user_id: int, floor: int) -> None:
 
 async def get_leaderboard(limit: int = 10) -> List[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT username, max_floor FROM users ORDER BY max_floor DESC, username ASC LIMIT ?",
             (limit,),
         )
@@ -744,7 +795,7 @@ async def get_leaderboard(limit: int = 10) -> List[Tuple]:
 
 async def get_leaderboard_page(limit: int, offset: int) -> List[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT username, max_floor FROM users "
             "ORDER BY max_floor DESC, username ASC LIMIT ? OFFSET ?",
             (limit, offset),
@@ -754,14 +805,14 @@ async def get_leaderboard_page(limit: int, offset: int) -> List[Tuple]:
 
 async def get_leaderboard_total() -> int:
     async with _connect() as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
 
 async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, max_floor, state_json FROM runs "
             "WHERE user_id = ? ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1",
             (user_id,),
@@ -776,7 +827,7 @@ async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]
 
 async def get_leaderboard_with_ids(limit: int = 10) -> List[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, username, max_floor FROM users "
             "ORDER BY max_floor DESC, username ASC LIMIT ?",
             (limit,),
@@ -786,7 +837,7 @@ async def get_leaderboard_with_ids(limit: int = 10) -> List[Tuple]:
 
 async def get_season_leaderboard_with_ids(season_id: int, limit: int = 10) -> List[Tuple]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT users.id, users.username, user_season_stats.max_floor "
             "FROM user_season_stats "
             "JOIN users ON users.id = user_season_stats.user_id "
@@ -799,7 +850,7 @@ async def get_season_leaderboard_with_ids(season_id: int, limit: int = 10) -> Li
 
 async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
             "FROM user_stats WHERE user_id = ?",
             (user_id,),
@@ -820,11 +871,11 @@ async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
 
 async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO user_stats (user_id) VALUES (?)",
             (user_id,),
         )
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
             "FROM user_stats WHERE user_id = ?",
             (user_id,),
@@ -847,7 +898,7 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
         for enemy_id, count in (state.get("kills", {}) or {}).items():
             kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
 
-        await db.execute(
+        await _execute(db, 
             "UPDATE user_stats SET total_runs = ?, deaths = ?, deaths_by_floor = ?, "
             "kills_json = ?, treasures_found = ?, chests_opened = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ?",
@@ -865,7 +916,7 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
 
 async def get_broadcast_targets(broadcast_key: str) -> List[Tuple[int, int]]:
     async with _connect() as db:
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT id, telegram_id FROM users WHERE id NOT IN ("
             "SELECT user_id FROM user_broadcasts WHERE broadcast_key = ?)",
             (broadcast_key,),
@@ -875,20 +926,20 @@ async def get_broadcast_targets(broadcast_key: str) -> List[Tuple[int, int]]:
 
 async def get_all_user_targets() -> List[Tuple[int, int]]:
     async with _connect() as db:
-        cursor = await db.execute("SELECT id, telegram_id FROM users")
+        cursor = await _execute(db, "SELECT id, telegram_id FROM users")
         return await cursor.fetchall()
 
 
 async def get_setting(key: str) -> Optional[str]:
     async with _connect() as db:
-        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        cursor = await _execute(db, "SELECT value FROM settings WHERE key = ?", (key,))
         row = await cursor.fetchone()
         return row[0] if row else None
 
 
 async def set_setting(key: str, value: str) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
@@ -898,7 +949,7 @@ async def set_setting(key: str, value: str) -> None:
 
 async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
     async with _connect() as db:
-        await db.execute(
+        await _execute(db, 
             "INSERT OR IGNORE INTO user_broadcasts (user_id, broadcast_key) VALUES (?, ?)",
             (user_id, broadcast_key),
         )
@@ -907,19 +958,19 @@ async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
 
 async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, object]:
     async with _connect() as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
         total_users = int(row[0]) if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM runs WHERE is_active = 1")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM runs WHERE is_active = 1")
         row = await cursor.fetchone()
         active_runs = int(row[0]) if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM runs")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM runs")
         row = await cursor.fetchone()
         total_runs = int(row[0]) if row else 0
 
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT COALESCE(SUM(deaths), 0), COALESCE(SUM(treasures_found), 0), "
             "COALESCE(SUM(chests_opened), 0) FROM user_stats"
         )
@@ -928,11 +979,11 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         total_treasures = int(row[1]) if row else 0
         total_chests = int(row[2]) if row else 0
 
-        cursor = await db.execute("SELECT COALESCE(MAX(max_floor), 0) FROM users")
+        cursor = await _execute(db, "SELECT COALESCE(MAX(max_floor), 0) FROM users")
         row = await cursor.fetchone()
         max_floor = int(row[0]) if row else 0
 
-        cursor = await db.execute(
+        cursor = await _execute(db, 
             "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM runs "
             "WHERE started_at >= datetime('now', '-1 day')"
         )
@@ -940,7 +991,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         runs_24h = int(row[0]) if row else 0
         users_24h = int(row[1]) if row else 0
 
-        cursor = await db.execute("SELECT deaths_by_floor FROM user_stats")
+        cursor = await _execute(db, "SELECT deaths_by_floor FROM user_stats")
         rows = await cursor.fetchall()
         weighted_sum = 0
         death_total = 0
@@ -956,7 +1007,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
                 death_total += count_int
         avg_death_floor = (weighted_sum / death_total) if death_total else 0.0
 
-        cursor = await db.execute("SELECT user_id, kills_json FROM user_stats")
+        cursor = await _execute(db, "SELECT user_id, kills_json FROM user_stats")
         rows = await cursor.fetchall()
         kill_totals = []
         user_ids = []
@@ -970,7 +1021,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         username_map = {}
         if user_ids:
             placeholders = ",".join("?" for _ in user_ids)
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 f"SELECT id, username FROM users WHERE id IN ({placeholders})",
                 tuple(user_ids),
             )
@@ -985,7 +1036,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
 
         broadcast_sent = 0
         if broadcast_key:
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 "SELECT COUNT(*) FROM user_broadcasts WHERE broadcast_key = ?",
                 (broadcast_key,),
             )
@@ -1015,7 +1066,7 @@ async def get_random_boss_name(
 ) -> Optional[str]:
     async with _connect() as db:
         if exclude_telegram_id is None:
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 "SELECT username FROM users "
                 "WHERE username IS NOT NULL AND TRIM(username) != '' "
                 "AND LOWER(TRIM(username)) != 'без имени' "
@@ -1024,7 +1075,7 @@ async def get_random_boss_name(
                 (min_floor,),
             )
         else:
-            cursor = await db.execute(
+            cursor = await _execute(db, 
                 "SELECT username FROM users "
                 "WHERE username IS NOT NULL AND TRIM(username) != '' "
                 "AND LOWER(TRIM(username)) != 'без имени' "
