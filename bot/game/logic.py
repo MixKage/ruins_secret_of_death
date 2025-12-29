@@ -199,6 +199,22 @@ def _add_potion(player: Dict, potion: Dict | None, count: int = 1) -> Tuple[int,
         player.setdefault("potions", []).append(copy.deepcopy(potion))
     return to_add, count - to_add
 
+def _fill_potions(player: Dict) -> Dict[str, int]:
+    added_counts: Dict[str, int] = {}
+    for potion_id in ("potion_small", "potion_medium", "potion_strong"):
+        limit = _potion_limit(potion_id)
+        current = count_potions(player, potion_id)
+        if current >= limit:
+            continue
+        potion = copy.deepcopy(get_upgrade_by_id(potion_id))
+        if not potion:
+            continue
+        to_add = limit - current
+        added, _ = _add_potion(player, potion, count=to_add)
+        if added:
+            added_counts[potion_id] = added
+    return added_counts
+
 
 def _add_scroll(player: Dict, scroll: Dict | None) -> Dict | None:
     if not scroll:
@@ -284,6 +300,10 @@ def _grant_random_scroll(player: Dict) -> Dict | None:
     if not SCROLLS:
         return None
     scroll = random.choice(SCROLLS)
+    return _add_scroll(player, scroll)
+
+def _grant_lightning_scroll(player: Dict) -> Dict | None:
+    scroll = copy.deepcopy(get_scroll_by_id("scroll_lightning"))
     return _add_scroll(player, scroll)
 
 def _mutate_enemy_template(template: Dict, prefix: str, info_suffix: str) -> Dict:
@@ -1041,6 +1061,14 @@ def check_battle_end(state: Dict) -> None:
             _append_log(state, "Но зелье вечной жизни все еще не найдено — путь продолжается.")
         elif state.get("boss_kind") == "daughter":
             _append_log(state, "<b>Дочь некроманта повержена.</b> Но тьма в руинах не рассеивается.")
+            added = _fill_potions(state["player"])
+            if added:
+                _append_log(state, "Запас зелий пополнен до максимума.")
+            else:
+                _append_log(state, "Запас зелий уже полон.")
+            scroll = _grant_lightning_scroll(state["player"])
+            if scroll:
+                _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
         elif state.get("boss_kind") == "fallen":
             boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
             _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
