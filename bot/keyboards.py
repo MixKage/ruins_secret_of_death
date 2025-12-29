@@ -12,6 +12,7 @@ def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> Inline
     builder.button(text="Рейтинг", callback_data="menu:leaderboard")
     builder.button(text="Правила", callback_data="menu:rules")
     builder.button(text="Статистика", callback_data="menu:stats")
+    builder.button(text="Личный кабинет", callback_data="menu:profile")
     if not has_active_run:
         builder.button(text="Поделиться", callback_data="menu:share")
     if is_admin:
@@ -113,8 +114,9 @@ def boss_artifact_kb(options: list) -> InlineKeyboardMarkup:
 def admin_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Обновить", callback_data="menu:admin:refresh")
+    builder.button(text="Пересчитать значки сезона", callback_data="menu:admin:season_badges")
     builder.button(text="Меню", callback_data="menu:main")
-    builder.adjust(2)
+    builder.adjust(1)
     return builder.as_markup()
 
 def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
@@ -123,6 +125,25 @@ def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
     builder.button(text="меню", callback_data="menu:main")
     builder.button(text="->", callback_data=f"menu:leaderboard:page:{page + 1}")
     builder.adjust(3)
+    return builder.as_markup()
+
+def rules_menu_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="О значках", callback_data="rules:badges")
+    builder.button(text="О сезонах", callback_data="rules:seasons")
+    builder.button(text="Оружие", callback_data="rules:weapons")
+    builder.button(text="Противники", callback_data="rules:enemies")
+    builder.button(text="Магия", callback_data="rules:magic")
+    builder.button(text="Улучшения", callback_data="rules:upgrades")
+    builder.button(text="Баланс", callback_data="rules:balance")
+    builder.button(text="Назад", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def rules_back_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Назад", callback_data="rules:menu")
+    builder.adjust(1)
     return builder.as_markup()
 
 def event_kb(options: list) -> InlineKeyboardMarkup:

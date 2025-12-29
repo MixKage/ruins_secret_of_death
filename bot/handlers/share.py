@@ -4,6 +4,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 from bot import db
+from bot.progress import ensure_current_season
 from bot.handlers.helpers import get_user_row
 
 router = Router()
@@ -68,12 +69,8 @@ async def share_callback(callback: CallbackQuery) -> None:
         return
 
     _, max_floor, state = last_run
-    leaderboard = await db.get_leaderboard_with_ids()
-    rank = None
-    for idx, (row_user_id, _username, _max_floor) in enumerate(leaderboard, start=1):
-        if row_user_id == user_id:
-            rank = idx
-            break
+    season_id, _season_key = await ensure_current_season()
+    rank = await db.get_user_season_rank(user_id, season_id)
 
     text = _format_share_message(state, max_floor, rank)
     await callback.answer()

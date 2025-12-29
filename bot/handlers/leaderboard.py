@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from bot import db
+from bot.progress import ensure_current_season, season_label
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import leaderboard_kb, main_menu_kb
 from bot.utils.telegram import edit_or_send
@@ -15,10 +16,10 @@ router = Router()
 PAGE_SIZE = 10
 
 
-def _format_leaderboard(rows, page: int, total_pages: int) -> str:
+def _format_leaderboard(rows, page: int, total_pages: int, season_key: str) -> str:
     if not rows:
         return "<i>Рейтинг пуст.</i>"
-    lines = [f"<b>Рейтинг:</b> страница {page}/{total_pages}"]
+    lines = [f"<b>Рейтинг {season_label(season_key)}:</b> страница {page}/{total_pages}"]
     start_rank = (page - 1) * PAGE_SIZE + 1
     for idx, (username, max_floor) in enumerate(rows, start=start_rank):
         name = escape(username) if username else "Без имени"
@@ -29,13 +30,14 @@ def _format_leaderboard(rows, page: int, total_pages: int) -> str:
 async def _show_leaderboard(callback: CallbackQuery, page: int) -> None:
     requested_page = page
     page = max(1, page)
-    total = await db.get_leaderboard_total()
+    season_id, season_key = await ensure_current_season()
+    total = await db.get_season_leaderboard_total(season_id)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     if page > total_pages:
         page = total_pages
 
-    rows = await db.get_leaderboard_page(PAGE_SIZE, (page - 1) * PAGE_SIZE)
-    text = _format_leaderboard(rows, page, total_pages)
+    rows = await db.get_season_leaderboard_page(season_id, PAGE_SIZE, (page - 1) * PAGE_SIZE)
+    text = _format_leaderboard(rows, page, total_pages, season_key)
 
     if requested_page < 1:
         await callback.answer("Это первая страница.")
@@ -76,9 +78,10 @@ async def leaderboard_menu_callback(callback: CallbackQuery) -> None:
 
 @router.message(Command("leaderboard"))
 async def leaderboard_command(message: Message) -> None:
-    total = await db.get_leaderboard_total()
+    season_id, season_key = await ensure_current_season()
+    total = await db.get_season_leaderboard_total(season_id)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-    rows = await db.get_leaderboard_page(PAGE_SIZE, 0)
-    text = _format_leaderboard(rows, 1, total_pages)
+    rows = await db.get_season_leaderboard_page(season_id, PAGE_SIZE, 0)
+    text = _format_leaderboard(rows, 1, total_pages, season_key)
     is_admin = is_admin_user(message.from_user)
     await message.answer(text, reply_markup=main_menu_kb(is_admin=is_admin))

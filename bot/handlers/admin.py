@@ -7,6 +7,7 @@ from bot import db
 from bot.handlers.broadcast import BROADCAST_KEY
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import admin_kb
+from bot.progress import award_current_season_badges, award_latest_closed_season_badges, season_label
 from bot.utils.telegram import edit_or_send
 
 router = Router()
@@ -69,4 +70,18 @@ async def admin_menu(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "menu:admin:refresh")
 async def admin_refresh(callback: CallbackQuery) -> None:
     await callback.answer("Обновляю...")
+    await _show_admin_panel(callback)
+
+
+@router.callback_query(F.data == "menu:admin:season_badges")
+async def admin_season_badges(callback: CallbackQuery) -> None:
+    if not is_admin_user(callback.from_user):
+        await callback.answer("Команда недоступна.", show_alert=True)
+        return
+    season_key = await award_latest_closed_season_badges()
+    if season_key:
+        await callback.answer(f"Пересчитано: {season_label(season_key)}")
+    else:
+        season_key = await award_current_season_badges()
+        await callback.answer(f"Пересчитано: {season_label(season_key)} (текущий)")
     await _show_admin_panel(callback)

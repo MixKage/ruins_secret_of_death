@@ -1,10 +1,13 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
 DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
+PIONEER_BADGE_ID = "first_pioneer"
+PIONEER_BADGE_CUTOFF = "2026-01-01"
 
 
 async def init_db() -> None:
@@ -49,8 +52,303 @@ async def init_db() -> None:
                 PRIMARY KEY (user_id, broadcast_key),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS seasons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season_key TEXT UNIQUE NOT NULL,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS user_season_stats (
+                user_id INTEGER NOT NULL,
+                season_id INTEGER NOT NULL,
+                max_floor INTEGER DEFAULT 0,
+                total_runs INTEGER DEFAULT 0,
+                kills_json TEXT DEFAULT "{}",
+                treasures_found INTEGER DEFAULT 0,
+                chests_opened INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, season_id),
+                FOREIGN KEY(user_id) REFERENCES users(id),
+                FOREIGN KEY(season_id) REFERENCES seasons(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_badges (
+                user_id INTEGER NOT NULL,
+                badge_id TEXT NOT NULL,
+                count INTEGER DEFAULT 1,
+                last_awarded_season TEXT,
+                last_awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, badge_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
             """
         )
+        await _ensure_user_columns(db)
+        await db.execute(
+            "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
+            "SELECT id, ?, 1, NULL FROM users WHERE DATE(created_at) < DATE(?)",
+            (PIONEER_BADGE_ID, PIONEER_BADGE_CUTOFF),
+        )
+        await db.commit()
+
+
+async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(users)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "xp" not in columns:
+        await db.execute("ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0")
+        await db.commit()
+
+
+def _current_season_key() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+async def get_or_create_current_season() -> Tuple[int, str, Optional[Tuple[int, str]]]:
+    season_key = _current_season_key()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT id FROM seasons WHERE season_key = ?", (season_key,))
+        row = await cursor.fetchone()
+        if row:
+            return row[0], season_key, None
+        cursor = await db.execute(
+            "SELECT id, season_key FROM seasons WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+        )
+        prev = await cursor.fetchone()
+        if prev:
+            await db.execute(
+                "UPDATE seasons SET ended_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (prev[0],),
+            )
+        cursor = await db.execute(
+            "INSERT INTO seasons (season_key) VALUES (?)",
+            (season_key,),
+        )
+        await db.commit()
+        prev_info = (prev[0], prev[1]) if prev else None
+        return cursor.lastrowid, season_key, prev_info
+
+
+async def get_last_season(ended_only: bool = False) -> Optional[Tuple[int, str]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        if ended_only:
+            cursor = await db.execute(
+                "SELECT id, season_key FROM seasons "
+                "WHERE ended_at IS NOT NULL ORDER BY started_at DESC LIMIT 1"
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT id, season_key FROM seasons ORDER BY started_at DESC LIMIT 1"
+            )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row[0], row[1]
+
+
+async def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT username, xp, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        username, xp, created_at = row
+        return {
+            "username": username,
+            "xp": int(xp or 0),
+            "created_at": created_at,
+        }
+
+
+async def add_user_xp(user_id: int, amount: int) -> None:
+    if amount <= 0:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET xp = COALESCE(xp, 0) + ? WHERE id = ?",
+            (amount, user_id),
+        )
+        await db.commit()
+
+
+async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
+            (user_id, season_id),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {
+                "max_floor": 0,
+                "total_runs": 0,
+                "kills": {},
+                "treasures_found": 0,
+                "chests_opened": 0,
+            }
+        max_floor, total_runs, kills_json, treasures_found, chests_opened = row
+        return {
+            "max_floor": max_floor or 0,
+            "total_runs": total_runs or 0,
+            "kills": json.loads(kills_json or "{}"),
+            "treasures_found": treasures_found or 0,
+            "chests_opened": chests_opened or 0,
+        }
+
+
+async def record_season_stats(
+    user_id: int,
+    season_id: int,
+    state: Dict[str, Any],
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+            (user_id, season_id),
+        )
+        cursor = await db.execute(
+            "SELECT max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
+            (user_id, season_id),
+        )
+        row = await cursor.fetchone()
+        max_floor, total_runs, kills_json, treasures_found, chests_opened = row or (0, 0, "{}", 0, 0)
+
+        max_floor = max(max_floor or 0, int(state.get("floor", 0)))
+        total_runs = (total_runs or 0) + 1
+        kills = json.loads(kills_json or "{}")
+        treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
+        chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
+
+        for enemy_id, count in (state.get("kills", {}) or {}).items():
+            kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
+
+        await db.execute(
+            "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
+            "treasures_found = ?, chests_opened = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE user_id = ? AND season_id = ?",
+            (
+                max_floor,
+                total_runs,
+                json.dumps(kills),
+                treasures_found,
+                chests_opened,
+                user_id,
+                season_id,
+            ),
+        )
+        await db.commit()
+
+
+async def get_season_leaderboard_total(season_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM user_season_stats WHERE season_id = ? AND max_floor > 0",
+            (season_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+async def get_season_leaderboard_page(season_id: int, limit: int, offset: int) -> List[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT users.username, user_season_stats.max_floor "
+            "FROM user_season_stats "
+            "JOIN users ON users.id = user_season_stats.user_id "
+            "WHERE user_season_stats.season_id = ? "
+            "ORDER BY user_season_stats.max_floor DESC, users.username ASC "
+            "LIMIT ? OFFSET ?",
+            (season_id, limit, offset),
+        )
+        return await cursor.fetchall()
+
+
+async def get_user_season_rank(user_id: int, season_id: int) -> Optional[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT rank FROM ("
+            "SELECT user_id, ROW_NUMBER() OVER (ORDER BY max_floor DESC, user_id ASC) AS rank "
+            "FROM user_season_stats WHERE season_id = ? AND max_floor > 0"
+            ") WHERE user_id = ?",
+            (season_id, user_id),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
+
+
+async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened "
+            "FROM user_season_stats WHERE season_id = ?",
+            (season_id,),
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            user_id, max_floor, total_runs, kills_json, treasures_found, chests_opened = row
+            results.append(
+                {
+                    "user_id": user_id,
+                    "max_floor": max_floor or 0,
+                    "total_runs": total_runs or 0,
+                    "kills": json.loads(kills_json or "{}"),
+                    "treasures_found": treasures_found or 0,
+                    "chests_opened": chests_opened or 0,
+                }
+            )
+        return results
+
+
+async def get_user_badges(user_id: int) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT badge_id, count, last_awarded_season FROM user_badges WHERE user_id = ?",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {"badge_id": badge_id, "count": count or 0, "last_awarded_season": last_awarded_season}
+            for badge_id, count, last_awarded_season in rows
+        ]
+
+
+async def award_badge(
+    user_id: int,
+    badge_id: str,
+    season_key: Optional[str] = None,
+) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT count, last_awarded_season FROM user_badges WHERE user_id = ? AND badge_id = ?",
+            (user_id, badge_id),
+        )
+        row = await cursor.fetchone()
+        if row:
+            count, last_awarded_season = row
+            if season_key and last_awarded_season == season_key:
+                return False
+            new_count = (count or 0) + 1
+            await db.execute(
+                "UPDATE user_badges SET count = ?, last_awarded_season = ?, "
+                "last_awarded_at = CURRENT_TIMESTAMP WHERE user_id = ? AND badge_id = ?",
+                (new_count, season_key, user_id, badge_id),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
+                "VALUES (?, ?, 1, ?)",
+                (user_id, badge_id, season_key),
+            )
+        await db.commit()
+        return True
         await db.commit()
 
 
@@ -70,7 +368,21 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
             (telegram_id,),
         )
         row = await cursor.fetchone()
-        return row[0]
+        user_id = row[0]
+        cursor = await db.execute(
+            "SELECT created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        created_row = await cursor.fetchone()
+        created_at = created_row[0] if created_row else None
+        if created_at:
+            await db.execute(
+                "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
+                "SELECT ?, ?, 1, NULL WHERE DATE(?) < DATE(?)",
+                (user_id, PIONEER_BADGE_ID, created_at, PIONEER_BADGE_CUTOFF),
+            )
+        await db.commit()
+        return user_id
 
 
 async def get_user(user_id: int) -> Optional[Tuple]:
@@ -188,6 +500,19 @@ async def get_leaderboard_with_ids(limit: int = 10) -> List[Tuple]:
             "SELECT id, username, max_floor FROM users "
             "ORDER BY max_floor DESC, username ASC LIMIT ?",
             (limit,),
+        )
+        return await cursor.fetchall()
+
+
+async def get_season_leaderboard_with_ids(season_id: int, limit: int = 10) -> List[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT users.id, users.username, user_season_stats.max_floor "
+            "FROM user_season_stats "
+            "JOIN users ON users.id = user_season_stats.user_id "
+            "WHERE user_season_stats.season_id = ? AND user_season_stats.max_floor > 0 "
+            "ORDER BY user_season_stats.max_floor DESC, users.username ASC LIMIT ?",
+            (season_id, limit),
         )
         return await cursor.fetchall()
 
@@ -391,4 +716,3 @@ async def get_random_boss_name(min_floor: int = 10) -> Optional[str]:
         )
         row = await cursor.fetchone()
         return row[0] if row else None
-

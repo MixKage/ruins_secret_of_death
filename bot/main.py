@@ -11,7 +11,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from bot.config import get_bot_token
 from bot.db import init_db
-from bot.handlers import admin_router, broadcast_router, game_router, leaderboard_router, rules_router, share_router, start_router, stats_router
+from bot.handlers import admin_router, broadcast_router, game_router, leaderboard_router, rules_router, share_router, start_router, stats_router, profile_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ async def main() -> None:
         dispatcher.include_router(rules_router)
         dispatcher.include_router(share_router)
         dispatcher.include_router(stats_router)
+        dispatcher.include_router(profile_router)
         logger.info("Starting bot polling")
         await dispatcher.start_polling(bot)
     except Exception:

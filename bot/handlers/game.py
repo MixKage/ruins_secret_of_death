@@ -34,6 +34,7 @@ from bot.keyboards import (
     forfeit_confirm_kb,
 )
 from bot.handlers.helpers import get_user_row, is_admin_user
+from bot.progress import ensure_current_season, record_run_progress
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
@@ -56,6 +57,7 @@ async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, st
     await db.finish_run(run_id, state.get("floor", 0))
     await db.update_user_max_floor(user_id, state.get("floor", 0))
     await db.record_run_stats(user_id, state, died=False)
+    await record_run_progress(user_id, state)
     await callback.answer("Забег завершен.")
     if callback.message:
         await safe_edit_text(
@@ -194,6 +196,7 @@ async def start_new_run(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_id, state.get("floor", 0))
         await db.record_run_stats(user_id, state, died=False)
+        await record_run_progress(user_id, state)
 
     state = new_run_state()
     run_id = await db.create_run(user_id, state)
@@ -313,17 +316,14 @@ async def battle_action(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
+        await record_run_progress(user_row[0], state)
 
         await callback.answer()
         if callback.message:
             await safe_edit_text(callback.message, render_state(state), reply_markup=None)
 
-        leaderboard = await db.get_leaderboard_with_ids()
-        rank = None
-        for idx, (row_user_id, _username, _max_floor) in enumerate(leaderboard, start=1):
-            if row_user_id == user_row[0]:
-                rank = idx
-                break
+        season_id, _season_key = await ensure_current_season()
+        rank = await db.get_user_season_rank(user_row[0], season_id)
         summary_text = _format_run_summary(state, rank)
         await callback.bot.send_message(callback.from_user.id, summary_text)
         await callback.bot.send_message(
@@ -578,6 +578,7 @@ async def event_choice(callback: CallbackQuery) -> None:
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
+        await record_run_progress(user_row[0], state)
     else:
         await db.update_run(run_id, state)
 
