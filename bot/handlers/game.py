@@ -253,19 +253,24 @@ async def battle_action(callback: CallbackQuery) -> None:
     elif action == "attack_all":
         boss_target = None
         total_boss_damage = None
+        alive_before = sum(1 for enemy in state.get("enemies", []) if enemy.get("hp", 0) > 0)
         if state.get("boss_kind"):
             boss_target = next((enemy for enemy in state.get("enemies", []) if enemy.get("hp", 0) > 0), None)
             if boss_target:
                 total_boss_damage = 0
         while state["phase"] == "battle" and state["player"]["ap"] > 0:
             prev_hp = boss_target.get("hp", 0) if boss_target else 0
-            player_attack(state)
+            player_attack(state, log_kills=False)
             if total_boss_damage is not None and boss_target:
                 total_boss_damage += max(0, prev_hp - boss_target.get("hp", 0))
             if state["phase"] != "battle":
                 break
         if total_boss_damage is not None and total_boss_damage > 0:
             _append_log(state, f"Суммарный урон по боссу: {total_boss_damage}.")
+        if alive_before > 1:
+            alive_after = sum(1 for enemy in state.get("enemies", []) if enemy.get("hp", 0) > 0)
+            killed = max(0, alive_before - alive_after)
+            _append_log(state, f"Побеждено врагов за ход: {killed}.")
     elif action == "inventory":
         state["phase"] = "inventory"
         await db.update_run(run_id, state)

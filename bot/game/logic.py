@@ -886,7 +886,7 @@ def end_turn(state: Dict) -> None:
     _tally_kills(state)
     check_battle_end(state)
 
-def player_attack(state: Dict) -> None:
+def player_attack(state: Dict, log_kills: bool = True) -> None:
     player = state["player"]
     if player["ap"] <= 0:
         _append_log(state, "Нет ОД для атаки.")
@@ -936,7 +936,7 @@ def player_attack(state: Dict) -> None:
 
     check_battle_end(state)
 
-    if alive_before > 3:
+    if log_kills and alive_before > 3:
         alive_after = len(_alive_enemies(state["enemies"]))
         killed = max(0, alive_before - alive_after)
         _append_log(state, f"Побеждено врагов за ход: {killed}.")
