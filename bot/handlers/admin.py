@@ -41,7 +41,7 @@ def _format_admin_panel(stats: dict) -> str:
 
     lines.append("")
     lines.append(
-        f"<b>Рассылка «Магия»:</b> отправлено {stats.get('broadcast_sent', 0)} | "
+        f"<b>Рассылка «Баланс»:</b> отправлено {stats.get('broadcast_sent', 0)} | "
         f"осталось {stats.get('broadcast_pending', 0)}"
     )
 
