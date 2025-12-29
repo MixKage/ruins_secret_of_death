@@ -100,7 +100,7 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
     treasure_xp = int(state.get("treasure_xp", 0))
     if treasure_xp <= 0:
         treasure_xp = int(treasures_found) * TREASURE_REWARD_XP
-    bonus_xp = total_kills + treasure_xp
+    bonus_xp = treasure_xp
     hp_max = int(player.get("hp_max", 0))
     ap_max = int(player.get("ap_max", 0))
     armor = int(round(player.get("armor", 0)))
@@ -117,7 +117,7 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
         f"<b>Убийств:</b> {total_kills}",
         f"<b>Сундуков открыто:</b> {chests_opened}",
         f"<b>Сокровищ найдено:</b> {treasures_found}",
-        f"<b>Бонусный опыт:</b> {bonus_xp} (убийства {total_kills}, сокровища {treasures_found} x {TREASURE_REWARD_XP})",
+        f"<b>Опыт за сокровища:</b> {bonus_xp} (сокровища {treasures_found} x {TREASURE_REWARD_XP})",
         "",
         (
             f"<b>Итоговые статы:</b> HP {hp_max} | ОД {ap_max} | "

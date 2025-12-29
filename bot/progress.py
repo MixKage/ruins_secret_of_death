@@ -38,7 +38,7 @@ SEASON_ONE_MONTH = 1
 SEASON_ZERO_START_DATE = datetime(2025, 12, 20, tzinfo=timezone.utc)
 SEASON_ONE_START_DATE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 LAST_PROCESSED_SETTING = "last_processed_season"
-TREASURE_REWARD_XP = 10
+TREASURE_REWARD_XP = 5
 SUMMARY_BADGES = [
     "season_top1",
     "season_top2",
@@ -196,8 +196,7 @@ async def record_run_progress(user_id: int, state: Dict, died: bool | None = Non
     treasure_xp = int(state.get("treasure_xp", 0))
     if treasure_xp <= 0:
         treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
-    kills_xp = sum((state.get("kills") or {}).values())
-    bonus_xp = treasure_xp + kills_xp
+    bonus_xp = treasure_xp
     state_with_bonus = dict(state)
     if bonus_xp > 0:
         state_with_bonus["xp_bonus"] = bonus_xp

@@ -20,7 +20,7 @@ PIONEER_BADGE_CUTOFF = "2026-01-01"
 SEASON0_KEY = "2025-12"
 SEASON0_START = "2025-12-20"
 SEASON0_BACKFILL_SETTING = "season0_backfill_done"
-TREASURE_REWARD_XP = 10
+TREASURE_REWARD_XP = 5
 
 
 @asynccontextmanager
@@ -266,8 +266,7 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
         treasure_xp = int(state.get("treasure_xp", 0))
         if treasure_xp <= 0:
             treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
-        kills_xp = sum((state.get("kills") or {}).values())
-        agg["xp_gained"] += max(0, floor_value) + treasure_xp + kills_xp
+        agg["xp_gained"] += max(0, floor_value) + treasure_xp
         for enemy_id, count in (state.get("kills", {}) or {}).items():
             agg["kills"][enemy_id] = agg["kills"].get(enemy_id, 0) + int(count)
 
