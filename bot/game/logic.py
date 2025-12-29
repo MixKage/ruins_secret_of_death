@@ -813,7 +813,9 @@ def roll_hit(attacker_accuracy: float, defender_evasion: float) -> bool:
 def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
     base = random.randint(weapon["min_dmg"], weapon["max_dmg"]) + player["power"]
     armor = max(0.0, target["armor"] * (1.0 - weapon["armor_pierce"]))
-    dmg = int(max(1, base - armor))
+    reduced_portion = base * ENEMY_ARMOR_REDUCED_RATIO
+    bypass_portion = base * (1.0 - ENEMY_ARMOR_REDUCED_RATIO)
+    dmg = int(max(1, round(max(0.0, reduced_portion - armor) + bypass_portion)))
     if _has_resolve(player):
         dmg = max(1, int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS))))
     return dmg
