@@ -1569,7 +1569,7 @@ def render_state(state: Dict) -> str:
 
     if state["phase"] in {"battle", "forfeit_confirm"}:
         if enemies:
-            lines.append("<b>Враги:</b>")
+            lines.append(f"<b>Враги ({len(enemies)}):</b>")
             for enemy in enemies:
                 lines.append(f"- <b>{enemy['name']}</b>: {enemy['hp']}/{enemy['max_hp']} HP")
         else:
