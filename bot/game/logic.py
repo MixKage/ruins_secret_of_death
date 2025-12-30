@@ -1204,7 +1204,7 @@ def enemy_phase(state: Dict) -> None:
             _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
             return
 
-    if state["phase"] == "battle" and group_size > 3 and total_damage > 0:
+    if state["phase"] == "battle" and group_size > 1 and total_damage > 0:
         _append_log(state, f"Суммарный урон от врагов: {total_damage}.")
 
 def check_battle_end(state: Dict) -> None:
