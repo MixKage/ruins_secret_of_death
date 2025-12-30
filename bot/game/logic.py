@@ -67,9 +67,9 @@ SURVIVE_ONE_TURN_FLOOR = 50
 
 BOSS_ARTIFACT_OPTIONS = [
     {
-        "id": "artifact_hp",
-        "name": "Печать крови",
-        "effect": "+10 к макс. HP",
+        "id": "artifact_power",
+        "name": "Печать ярости",
+        "effect": "+2 к урону",
     },
     {
         "id": "artifact_ap",
@@ -1488,10 +1488,9 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
 
 def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
     player = state["player"]
-    if artifact_id == "artifact_hp":
-        player["hp_max"] += 10
-        player["hp"] += 10
-        _append_log(state, "Артефакт крови наполняет вас: <b>+10</b> к макс. HP.")
+    if artifact_id in {"artifact_power", "artifact_hp"}:
+        player["power"] = player.get("power", 0) + 2
+        _append_log(state, "Печать ярости наполняет вас: <b>+2</b> к урону.")
     elif artifact_id == "artifact_ap":
         cap = _ap_max_cap_for_floor(state.get("floor", 1))
         if int(player.get("ap_max", 0)) >= cap:
