@@ -1177,6 +1177,10 @@ def check_battle_end(state: Dict) -> None:
             _append_log(state, "Но зелье вечной жизни все еще не найдено — путь продолжается.")
         elif state.get("boss_kind") == "daughter":
             _append_log(state, "<b>Дочь некроманта повержена.</b> Но тьма в руинах не рассеивается.")
+            player = state["player"]
+            player["hp_max"] += 5
+            player["hp"] += 5
+            _append_log(state, "Награда: <b>+5</b> к макс. HP.")
             added = _fill_potions(state["player"])
             if added:
                 _append_log(state, "Запас зелий пополнен до максимума.")
@@ -1188,6 +1192,10 @@ def check_battle_end(state: Dict) -> None:
         elif state.get("boss_kind") == "fallen":
             boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
             _append_log(state, f"<b>{boss_name}</b> повержен. Руины снова молчат.")
+            player = state["player"]
+            player["hp_max"] += 5
+            player["hp"] += 5
+            _append_log(state, "Награда: <b>+5</b> к макс. HP.")
             added, dropped = _grant_strong_potion(state["player"], count=1)
             if added:
                 _append_log(state, "Награда: <b>сильное зелье</b>.")
