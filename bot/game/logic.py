@@ -247,17 +247,18 @@ def _add_potion(player: Dict, potion: Dict | None, count: int = 1) -> Tuple[int,
         player.setdefault("potions", []).append(copy.deepcopy(potion))
     return to_add, count - to_add
 
-def _fill_potions(player: Dict) -> Dict[str, int]:
+def _fill_potions(player: Dict, ratio: float = 1.0) -> Dict[str, int]:
     added_counts: Dict[str, int] = {}
     for potion_id in ("potion_small", "potion_medium", "potion_strong"):
         limit = _potion_limit(potion_id)
+        target = max(1, int(limit * ratio)) if limit > 0 else 0
         current = count_potions(player, potion_id)
-        if current >= limit:
+        if current >= target:
             continue
         potion = copy.deepcopy(get_upgrade_by_id(potion_id))
         if not potion:
             continue
-        to_add = limit - current
+        to_add = target - current
         added, _ = _add_potion(player, potion, count=to_add)
         if added:
             added_counts[potion_id] = added
@@ -1222,9 +1223,11 @@ def check_battle_end(state: Dict) -> None:
             player["hp_max"] += 5
             player["hp"] += 5
             _append_log(state, "Награда: <b>+5</b> к макс. HP.")
-            added = _fill_potions(state["player"])
+            state["treasure_xp"] = state.get("treasure_xp", 0) + 10
+            _append_log(state, "Награда: <b>+10 XP</b>.")
+            added = _fill_potions(state["player"], ratio=0.5)
             if added:
-                _append_log(state, "Запас зелий пополнен до максимума.")
+                _append_log(state, "Запас зелий пополнен до половины.")
             else:
                 _append_log(state, "Запас зелий уже полон.")
             scroll = _grant_lightning_scroll(state["player"])
