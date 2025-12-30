@@ -1331,8 +1331,12 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
 
 
 def prepare_event(state: Dict) -> None:
+    last_event_id = state.get("last_event_id")
     state["phase"] = "event"
-    state["event_options"] = _event_options_for_floor(state.get("floor", 1))
+    options = _event_options_for_floor(state.get("floor", 1))
+    if last_event_id in {"treasure_chest", "campfire"}:
+        options = [option for option in options if option.get("id") != last_event_id]
+    state["event_options"] = options
     state["treasure_reward"] = None
     state["boss_artifacts"] = []
     state["show_info"] = False
@@ -1355,6 +1359,7 @@ def apply_reward(state: Dict, reward_index: int) -> None:
 
 def apply_event_choice(state: Dict, event_id: str) -> None:
     player = state["player"]
+    state["last_event_id"] = event_id
     advance = True
     late_floor = state.get("floor", 0) >= CURSED_FLOOR_MIN_FLOOR
     if event_id == "holy_spring":
