@@ -1748,6 +1748,23 @@ def render_state(state: Dict) -> str:
     elif state["phase"] == "dead":
         lines.append("<b>Вы погибли.</b>")
 
+    if state["phase"] in {"battle", "forfeit_confirm"} and enemies:
+        total_expected = 0.0
+        total_max = 0
+        player_evasion = player.get("evasion", 0.0)
+        floor = state.get("floor")
+        for enemy in enemies:
+            hit_damage = _enemy_damage_to_player(enemy, player, floor)
+            hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
+            total_expected += hit_damage * hit_chance
+            total_max += hit_damage
+        expected_display = max(1, int(round(total_expected)))
+        lines.append("")
+        lines.append(
+            f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
+            f"урон врагов (ожид./макс.): {expected_display}/{total_max}"
+        )
+
     log_lines = []
     if state.get("log"):
         log_lines = ["", "<i>Последние события:</i>", *state["log"]]
