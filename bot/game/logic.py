@@ -152,7 +152,13 @@ def _has_trait(enemy: Dict, trait: str) -> bool:
     return trait in enemy.get("traits", [])
 
 def _enemy_always_hits(enemy: Dict) -> bool:
-    return bool(enemy.get("always_hit"))
+    if enemy.get("always_hit"):
+        return True
+    if _has_trait(enemy, ELITE_TRAIT_TRUE_STRIKE):
+        return True
+    if _has_trait(enemy, ELITE_TRAIT_SHADOW):
+        return True
+    return False
 
 def _enemy_guaranteed_hit_every(enemy: Dict) -> int:
     return int(enemy.get("guaranteed_hit_every", 0) or 0)
