@@ -20,6 +20,8 @@ AP_MAX_STEP_PER_TIER = 2
 
 ARMOR_CAP_BEFORE_50 = 4
 ARMOR_CAP_BEFORE_100 = 6
+EVASION_CAP_BEFORE_50 = 0.4
+EVASION_CAP_BEFORE_100 = 0.8
 
 POTION_LIMITS = {
     "potion_small": 10,
@@ -306,6 +308,20 @@ def _is_armor_capped(player: Dict, floor: int) -> bool:
         return False
     return player.get("armor", 0) >= cap
 
+def _evasion_cap_for_floor(floor: int) -> float | None:
+    safe_floor = max(1, int(floor or 1))
+    if safe_floor < 50:
+        return EVASION_CAP_BEFORE_50
+    if safe_floor < 100:
+        return EVASION_CAP_BEFORE_100
+    return None
+
+def _is_evasion_capped(player: Dict, floor: int) -> bool:
+    cap = _evasion_cap_for_floor(floor)
+    if cap is None:
+        return False
+    return player.get("evasion", 0.0) >= cap
+
 
 def _is_ap_max_capped(player: Dict, floor: int) -> bool:
     return int(player.get("ap_max", 0)) >= _ap_max_cap_for_floor(floor)
@@ -522,6 +538,8 @@ def _filter_chest_loot_for_player(pool: List[Dict], player: Dict | None, floor: 
         filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "stamina")]
     if _is_armor_capped(player, floor):
         filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "plating")]
+    if _is_evasion_capped(player, floor):
+        filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "agility")]
     return filtered
 
 
@@ -540,6 +558,8 @@ def _filter_upgrades_for_player(upgrades: List[Dict], player: Dict | None, floor
         filtered = [item for item in filtered if not (item.get("stat") == "ap_max" or item.get("id") == "stamina")]
     if _is_armor_capped(player, floor):
         filtered = [item for item in filtered if not (item.get("stat") == "armor" or item.get("id") == "plating")]
+    if _is_evasion_capped(player, floor):
+        filtered = [item for item in filtered if not (item.get("stat") == "evasion" or item.get("id") == "agility")]
     return filtered
 
 def scale_weapon_stats(weapon: Dict, floor: int) -> None:
@@ -1340,6 +1360,18 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
                 if cap is not None and new_value > cap:
                     new_value = cap
                 player["armor"] = new_value
+                _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
+                return True
+            if stat == "evasion":
+                cap = _evasion_cap_for_floor(state.get("floor", 1))
+                current = player.get("evasion", 0.0)
+                if cap is not None and current >= cap:
+                    _append_log(state, "Уклонение уже достигло максимума для этого этажа.")
+                    return False
+                new_value = current + upgrade["amount"]
+                if cap is not None and new_value > cap:
+                    new_value = cap
+                player["evasion"] = new_value
                 _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
                 return True
             player[stat] = player.get(stat, 0) + upgrade["amount"]
