@@ -961,6 +961,10 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
             total_display = max(1, int(round(total_expected)))
             lines.append(f"<b>Средний ожидаемый урон за ход:</b> {total_display}")
             lines.append(f"<b>Макс. урон при попадании всех:</b> {total_max}")
+        elif len(alive) == 1:
+            enemy = alive[0]
+            hit_damage = _enemy_damage_to_player(enemy, player, floor)
+            lines.append(f"<b>Макс. урон при попадании:</b> {hit_damage}")
     for enemy in alive:
         enemy_id = enemy.get("id")
         if enemy_id in seen:
