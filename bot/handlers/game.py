@@ -14,12 +14,16 @@ from bot.game.logic import (
     end_turn,
     enforce_ap_cap,
     new_run_state,
+    new_tutorial_state,
     _append_log,
     player_attack,
     player_use_potion,
     player_use_potion_by_id,
     player_use_scroll,
     render_state,
+    tutorial_apply_action,
+    tutorial_force_endturn,
+    tutorial_use_scroll,
     TREASURE_REWARD_XP,
     LATE_BOSS_NAME_FALLBACK,
 )
@@ -33,6 +37,7 @@ from bot.keyboards import (
     reward_kb,
     treasure_kb,
     forfeit_confirm_kb,
+    tutorial_fail_kb,
 )
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.progress import ensure_current_season, record_run_progress
@@ -41,6 +46,38 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 router = Router()
 
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
+    is_admin = is_admin_user(callback.from_user)
+    if callback.message:
+        await safe_edit_text(callback.message, text, reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin))
+    elif callback.from_user:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            text,
+            reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin),
+        )
+
+async def _show_tutorial_failed(callback: CallbackQuery, state: dict) -> None:
+    reason = state.get("tutorial_fail_reason")
+    lines = ["<b>Обучение провалено.</b>"]
+    if reason:
+        lines.append(reason)
+    lines.append("Хотите начать заново?")
+    text = "\n".join(lines)
+    if callback.message:
+        await safe_edit_text(callback.message, text, reply_markup=tutorial_fail_kb())
+    elif callback.from_user:
+        await callback.bot.send_message(callback.from_user.id, text, reply_markup=tutorial_fail_kb())
+
+async def _complete_tutorial(callback: CallbackQuery, user_id: int, run_id: int, state: dict) -> None:
+    telegram_id = callback.from_user.id if callback.from_user else None
+    if telegram_id is not None:
+        await db.set_tutorial_done(telegram_id, True)
+    await db.update_run(run_id, state)
+    await db.finish_tutorial_run(run_id)
+    text = (
+        "<b>Учебный рекрут повержен.</b>\n"
+        "Вы освоили ключевые механики и готовы к руинам."
+    )
     is_admin = is_admin_user(callback.from_user)
     if callback.message:
         await safe_edit_text(callback.message, text, reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin))
@@ -135,7 +172,7 @@ def _battle_markup(state: dict):
     has_potion = bool(player.get("potions"))
     can_attack = player["ap"] > 0
     can_attack_all = player["ap"] > 1
-    can_endturn = player["ap"] <= 0
+    can_endturn = player["ap"] <= 0 or tutorial_force_endturn(state)
     show_info = bool(state.get("show_info"))
     return battle_kb(
         has_potion=has_potion,
@@ -161,6 +198,10 @@ async def _send_state(callback: CallbackQuery, state: dict, run_id: int | None =
 def _markup_for_state(state: dict, is_admin: bool = False):
     if state["phase"] == "battle":
         return _battle_markup(state)
+    if state["phase"] == "tutorial":
+        return _battle_markup(state)
+    if state["phase"] == "tutorial_failed":
+        return tutorial_fail_kb()
     if state["phase"] == "forfeit_confirm":
         return forfeit_confirm_kb()
     if state["phase"] == "reward":
@@ -188,6 +229,15 @@ async def continue_run(callback: CallbackQuery) -> None:
         return
     active = await db.get_active_run(user_row[0])
     if not active:
+        tutorial_active = await db.get_active_tutorial(user_row[0])
+        if tutorial_active:
+            run_id, state = tutorial_active
+            await callback.answer()
+            if state.get("phase") == "tutorial_failed":
+                await _show_tutorial_failed(callback, state)
+            else:
+                await _send_state(callback, state, run_id)
+            return
         await callback.answer("Активных забегов нет.", show_alert=True)
         await _show_main_menu(callback, text="Нет активного забега.")
         return
@@ -203,6 +253,20 @@ async def start_new_run(callback: CallbackQuery) -> None:
     if user is None:
         return
     user_id = await db.ensure_user(user.id, user.username)
+    tutorial_done = await db.get_tutorial_done(user.id)
+    if not tutorial_done:
+        active_tutorial = await db.get_active_tutorial(user_id)
+        if active_tutorial:
+            run_id, state = active_tutorial
+        else:
+            state = new_tutorial_state()
+            run_id = await db.create_tutorial_run(user_id, state)
+        await callback.answer("Сначала пройдите обучение.")
+        if state.get("phase") == "tutorial_failed":
+            await _show_tutorial_failed(callback, state)
+        else:
+            await _send_state(callback, state, run_id)
+        return
     active = await db.get_active_run(user_id)
     if active:
         run_id, state = active
@@ -254,17 +318,32 @@ async def battle_action(callback: CallbackQuery) -> None:
 
     active = await db.get_active_run(user_row[0])
     if not active:
+        active = await db.get_active_tutorial(user_row[0])
+    if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
         await _show_main_menu(callback)
         return
 
     run_id, state = active
+    action = callback.data.split(":", 1)[1]
+    if state.get("tutorial"):
+        result = tutorial_apply_action(state, action)
+        if state.get("tutorial_failed") or result == "fail":
+            await db.update_run(run_id, state)
+            await callback.answer()
+            await _show_tutorial_failed(callback, state)
+            return
+        if state.get("tutorial_completed") or result == "complete":
+            await _complete_tutorial(callback, user_row[0], run_id, state)
+            return
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
     if state["phase"] != "battle":
         await callback.answer("Сейчас не фаза боя.", show_alert=True)
         await _send_state(callback, state, run_id)
         return
-
-    action = callback.data.split(":", 1)[1]
     if action == "attack":
         player_attack(state)
     elif action == "attack_all":
@@ -383,6 +462,33 @@ async def forfeit_action(callback: CallbackQuery) -> None:
         await _handle_forfeit(callback, user_row[0], run_id, state)
         return
 
+@router.callback_query(F.data.startswith("tutorial:"))
+async def tutorial_menu_action(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    if user is None:
+        return
+    user_id = await db.ensure_user(user.id, user.username)
+    action = callback.data.split(":", 1)[1] if callback.data else ""
+    active = await db.get_active_tutorial(user_id)
+    if action == "restart":
+        state = new_tutorial_state()
+        if active:
+            run_id, _ = active
+            await db.update_run(run_id, state)
+        else:
+            run_id = await db.create_tutorial_run(user_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+    if action == "menu":
+        if active:
+            run_id, _ = active
+            await db.finish_tutorial_run(run_id)
+        await callback.answer()
+        await _show_main_menu(callback)
+        return
+    await callback.answer("Неверное действие.", show_alert=True)
+
 
 
 
@@ -437,6 +543,8 @@ async def inventory_action(callback: CallbackQuery) -> None:
 
     active = await db.get_active_run(user_row[0])
     if not active:
+        active = await db.get_active_tutorial(user_row[0])
+    if not active:
         await callback.answer("Активных забегов нет.", show_alert=True)
         await _show_main_menu(callback)
         return
@@ -450,14 +558,28 @@ async def inventory_action(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
     if action == "back":
-        state["phase"] = "battle"
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
         await db.update_run(run_id, state)
         await callback.answer()
         await _send_state(callback, state, run_id)
         return
     if action == "use_id" and len(parts) > 2:
         scroll_id = parts[2]
-        state["phase"] = "battle"
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
+        if state.get("tutorial"):
+            result = tutorial_use_scroll(state, scroll_id)
+            if state.get("tutorial_failed") or result == "fail":
+                await db.update_run(run_id, state)
+                await callback.answer()
+                await _show_tutorial_failed(callback, state)
+                return
+            if state.get("tutorial_completed") or result == "complete":
+                await _complete_tutorial(callback, user_row[0], run_id, state)
+                return
+            await db.update_run(run_id, state)
+            await callback.answer()
+            await _send_state(callback, state, run_id)
+            return
         scrolls = state.get("player", {}).get("scrolls", [])
         index = None
         for idx, scroll in enumerate(scrolls):
@@ -479,7 +601,23 @@ async def inventory_action(callback: CallbackQuery) -> None:
         except ValueError:
             await callback.answer("Неверный свиток.", show_alert=True)
             return
-        state["phase"] = "battle"
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
+        if state.get("tutorial"):
+            scrolls = state.get("player", {}).get("scrolls", [])
+            scroll_id = scrolls[index].get("id") if index < len(scrolls) else None
+            result = tutorial_use_scroll(state, scroll_id)
+            if state.get("tutorial_failed") or result == "fail":
+                await db.update_run(run_id, state)
+                await callback.answer()
+                await _show_tutorial_failed(callback, state)
+                return
+            if state.get("tutorial_completed") or result == "complete":
+                await _complete_tutorial(callback, user_row[0], run_id, state)
+                return
+            await db.update_run(run_id, state)
+            await callback.answer()
+            await _send_state(callback, state, run_id)
+            return
         player_use_scroll(state, index)
         await db.update_run(run_id, state)
         await callback.answer()

@@ -58,6 +58,13 @@ def forfeit_confirm_kb() -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
+def tutorial_fail_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Повторить обучение", callback_data="tutorial:restart")
+    builder.button(text="Главное меню", callback_data="tutorial:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
 
 def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

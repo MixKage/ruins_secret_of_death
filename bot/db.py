@@ -100,6 +100,7 @@ async def init_db() -> None:
                 ended_at TIMESTAMP,
                 max_floor INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
+                is_tutorial INTEGER DEFAULT 0,
                 state_json TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
@@ -174,6 +175,7 @@ async def init_db() -> None:
             """
         )
         await _ensure_user_columns(db)
+        await _ensure_run_columns(db)
         await _ensure_user_season_columns(db)
         await _backfill_season0_stats(db)
         await _execute(db, 
@@ -192,6 +194,14 @@ async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
         await db.commit()
     if "tutorial_done" not in columns:
         await _execute(db, "ALTER TABLE users ADD COLUMN tutorial_done INTEGER DEFAULT 0")
+        await db.commit()
+
+
+async def _ensure_run_columns(db: aiosqlite.Connection) -> None:
+    cursor = await _execute(db, "PRAGMA table_info(runs)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "is_tutorial" not in columns:
+        await _execute(db, "ALTER TABLE runs ADD COLUMN is_tutorial INTEGER DEFAULT 0")
         await db.commit()
 
 
@@ -231,7 +241,7 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
 
     cursor = await _execute(db, 
         "SELECT user_id, state_json, max_floor FROM runs "
-        "WHERE is_active = 0 AND started_at >= ?",
+        "WHERE is_active = 0 AND is_tutorial = 0 AND started_at >= ?",
         (SEASON0_START,),
     )
     rows = await cursor.fetchall()
@@ -842,7 +852,23 @@ async def set_tutorial_done(telegram_id: int, done: bool) -> None:
 async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
     async with _connect() as db:
         cursor = await _execute(db, 
-            "SELECT id, state_json FROM runs WHERE user_id = ? AND is_active = 1 ORDER BY started_at DESC LIMIT 1",
+            "SELECT id, state_json FROM runs "
+            "WHERE user_id = ? AND is_active = 1 AND is_tutorial = 0 "
+            "ORDER BY started_at DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        run_id, state_json = row
+        return run_id, json.loads(state_json)
+
+async def get_active_tutorial(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
+    async with _connect() as db:
+        cursor = await _execute(db, 
+            "SELECT id, state_json FROM runs "
+            "WHERE user_id = ? AND is_active = 1 AND is_tutorial = 1 "
+            "ORDER BY started_at DESC LIMIT 1",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -855,7 +881,18 @@ async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
 async def create_run(user_id: int, state: Dict[str, Any]) -> int:
     async with _connect() as db:
         cursor = await _execute(db, 
-            "INSERT INTO runs (user_id, state_json, max_floor, is_active) VALUES (?, ?, ?, 1)",
+            "INSERT INTO runs (user_id, state_json, max_floor, is_active, is_tutorial) "
+            "VALUES (?, ?, ?, 1, 0)",
+            (user_id, json.dumps(state), state.get("floor", 0)),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def create_tutorial_run(user_id: int, state: Dict[str, Any]) -> int:
+    async with _connect() as db:
+        cursor = await _execute(db, 
+            "INSERT INTO runs (user_id, state_json, max_floor, is_active, is_tutorial) "
+            "VALUES (?, ?, ?, 1, 1)",
             (user_id, json.dumps(state), state.get("floor", 0)),
         )
         await db.commit()
@@ -876,6 +913,14 @@ async def finish_run(run_id: int, final_floor: int) -> None:
         await _execute(db, 
             "UPDATE runs SET is_active = 0, ended_at = CURRENT_TIMESTAMP, max_floor = ? WHERE id = ?",
             (final_floor, run_id),
+        )
+        await db.commit()
+
+async def finish_tutorial_run(run_id: int) -> None:
+    async with _connect() as db:
+        await _execute(db, 
+            "UPDATE runs SET is_active = 0, ended_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (run_id,),
         )
         await db.commit()
 
@@ -919,7 +964,8 @@ async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]
     async with _connect() as db:
         cursor = await _execute(db, 
             "SELECT id, max_floor, state_json FROM runs "
-            "WHERE user_id = ? ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1",
+            "WHERE user_id = ? AND is_tutorial = 0 "
+            "ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -1067,11 +1113,11 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         row = await cursor.fetchone()
         total_users = int(row[0]) if row else 0
 
-        cursor = await _execute(db, "SELECT COUNT(*) FROM runs WHERE is_active = 1")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM runs WHERE is_active = 1 AND is_tutorial = 0")
         row = await cursor.fetchone()
         active_runs = int(row[0]) if row else 0
 
-        cursor = await _execute(db, "SELECT COUNT(*) FROM runs")
+        cursor = await _execute(db, "SELECT COUNT(*) FROM runs WHERE is_tutorial = 0")
         row = await cursor.fetchone()
         total_runs = int(row[0]) if row else 0
 
@@ -1090,7 +1136,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
 
         cursor = await _execute(db, 
             "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM runs "
-            "WHERE started_at >= datetime('now', '-1 day')"
+            "WHERE started_at >= datetime('now', '-1 day') AND is_tutorial = 0"
         )
         row = await cursor.fetchone()
         runs_24h = int(row[0]) if row else 0
