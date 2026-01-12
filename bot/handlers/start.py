@@ -6,6 +6,7 @@ from bot import db
 from bot.game.logic import new_tutorial_state, render_state, tutorial_force_endturn
 from bot.handlers.helpers import is_admin_id
 from bot.keyboards import battle_kb, inventory_kb, main_menu_kb, tutorial_fail_kb
+from bot.story import build_chapter_caption
 from bot.texts import WELCOME_TEXT
 
 router = Router()
@@ -36,6 +37,11 @@ def _tutorial_markup(state: dict):
     )
 
 
+async def _send_tutorial_intro(message: Message) -> None:
+    caption = build_chapter_caption(0)
+    await message.answer(caption, parse_mode="HTML")
+
+
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
     user = message.from_user
@@ -50,6 +56,7 @@ async def start_handler(message: Message) -> None:
         else:
             state = new_tutorial_state()
             await db.create_tutorial_run(user_id, state)
+            await _send_tutorial_intro(message)
         text = _tutorial_fail_text(state) if state.get("phase") == "tutorial_failed" else render_state(state)
         await message.answer(text, reply_markup=_tutorial_markup(state))
         return

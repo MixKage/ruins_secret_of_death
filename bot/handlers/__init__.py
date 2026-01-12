@@ -7,6 +7,7 @@ from .share import router as share_router
 from .start import router as start_router
 from .stats import router as stats_router
 from .profile import router as profile_router
+from .story import router as story_router
 
 __all__ = [
     "start_router",
@@ -18,4 +19,5 @@ __all__ = [
     "broadcast_router",
     "admin_router",
     "profile_router",
+    "story_router",
 ]

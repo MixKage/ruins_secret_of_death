@@ -23,11 +23,27 @@ async def edit_or_send(
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> None:
-    if callback.message:
-        await safe_edit_text(callback.message, text, reply_markup=reply_markup)
-    elif callback.from_user:
+    message = callback.message
+    if message and message.text:
+        try:
+            await safe_edit_text(message, text, reply_markup=reply_markup)
+            return
+        except TelegramBadRequest as exc:
+            error_text = str(exc).lower()
+            if (
+                "there is no text in the message to edit" not in error_text
+                and "message can't be edited" not in error_text
+            ):
+                raise
+    if callback.from_user:
         await callback.bot.send_message(
             callback.from_user.id,
+            text,
+            reply_markup=reply_markup,
+        )
+    elif message:
+        await callback.bot.send_message(
+            message.chat.id,
             text,
             reply_markup=reply_markup,
         )

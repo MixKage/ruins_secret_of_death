@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from bot import db
 from bot.game.logic import (
@@ -38,9 +38,11 @@ from bot.keyboards import (
     treasure_kb,
     forfeit_confirm_kb,
     tutorial_fail_kb,
+    story_nav_kb,
 )
 from bot.handlers.helpers import get_user_row, is_admin_user
-from bot.progress import ensure_current_season, record_run_progress
+from bot.progress import ensure_current_season, record_run_progress, xp_to_level
+from bot.story import build_chapter_caption, chapter_photo_path, max_unlocked_chapter, STORY_MAX_CHAPTERS
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
@@ -89,13 +91,59 @@ async def _complete_tutorial(callback: CallbackQuery, user_id: int, run_id: int,
         )
 
 
+async def _get_user_xp(user_id: int) -> int:
+    profile = await db.get_user_profile(user_id)
+    return int(profile.get("xp", 0)) if profile else 0
+
+
+def _run_xp_gain(state: dict) -> int:
+    treasure_xp = int(state.get("treasure_xp", 0))
+    if treasure_xp <= 0:
+        treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
+    floor = int(state.get("floor", 0))
+    return max(0, floor + treasure_xp)
+
+
+async def _send_story_chapter(bot, chat_id: int, chapter: int, max_chapter: int) -> None:
+    caption = build_chapter_caption(chapter)
+    photo_path = chapter_photo_path(chapter)
+    markup = story_nav_kb(chapter, max_chapter)
+    if photo_path.exists():
+        photo = FSInputFile(str(photo_path))
+        await bot.send_photo(chat_id, photo, caption=caption, reply_markup=markup, parse_mode="HTML")
+        return
+    await bot.send_message(chat_id, caption, reply_markup=markup, parse_mode="HTML")
+
+async def _send_tutorial_intro(bot, chat_id: int) -> None:
+    caption = build_chapter_caption(0)
+    await bot.send_message(chat_id, caption, parse_mode="HTML")
+
+
+async def _maybe_send_story_chapters(bot, chat_id: int, old_xp: int, state: dict) -> None:
+    gained_xp = _run_xp_gain(state)
+    if gained_xp <= 0:
+        return
+    old_level, _old_current, _old_need = xp_to_level(old_xp)
+    new_level, _new_current, _new_need = xp_to_level(old_xp + gained_xp)
+    if new_level <= old_level:
+        return
+    max_chapter = max_unlocked_chapter(new_level)
+    start = max(1, old_level + 1)
+    end = min(new_level, STORY_MAX_CHAPTERS)
+    for chapter in range(start, end + 1):
+        await _send_story_chapter(bot, chat_id, chapter, max_chapter)
+
+
 
 async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, state: dict) -> None:
+    old_xp = await _get_user_xp(user_id)
     await db.update_run(run_id, state)
     await db.finish_run(run_id, state.get("floor", 0))
     await db.update_user_max_floor(user_id, state.get("floor", 0))
     await db.record_run_stats(user_id, state, died=False)
     await record_run_progress(user_id, state, died=False)
+    if callback.from_user:
+        await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
     await callback.answer("Забег завершен.")
     if callback.message:
         await safe_edit_text(
@@ -256,25 +304,36 @@ async def start_new_run(callback: CallbackQuery) -> None:
     tutorial_done = await db.get_tutorial_done(user.id)
     if not tutorial_done:
         active_tutorial = await db.get_active_tutorial(user_id)
+        created = False
         if active_tutorial:
             run_id, state = active_tutorial
         else:
             state = new_tutorial_state()
             run_id = await db.create_tutorial_run(user_id, state)
+            created = True
+            await _send_tutorial_intro(callback.bot, user.id)
         await callback.answer("Сначала пройдите обучение.")
         if state.get("phase") == "tutorial_failed":
             await _show_tutorial_failed(callback, state)
         else:
-            await _send_state(callback, state, run_id)
+            if created and callback.from_user:
+                text = render_state(state)
+                markup = _markup_for_state(state, is_admin=is_admin_user(callback.from_user))
+                await callback.bot.send_message(callback.from_user.id, text, reply_markup=markup)
+            else:
+                await _send_state(callback, state, run_id)
         return
     active = await db.get_active_run(user_id)
     if active:
         run_id, state = active
+        old_xp = await _get_user_xp(user_id)
         await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_id, state.get("floor", 0))
         await db.record_run_stats(user_id, state, died=False)
         await record_run_progress(user_id, state, died=False)
+        if callback.from_user:
+            await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
 
     state = new_run_state()
     run_id = await db.create_run(user_id, state)
@@ -405,6 +464,7 @@ async def battle_action(callback: CallbackQuery) -> None:
         return
 
     if state["phase"] == "dead":
+        old_xp = await _get_user_xp(user_row[0])
         await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
@@ -419,6 +479,8 @@ async def battle_action(callback: CallbackQuery) -> None:
         rank = await db.get_user_season_rank(user_row[0], season_id)
         summary_text = _format_run_summary(state, rank)
         await callback.bot.send_message(callback.from_user.id, summary_text)
+        if callback.from_user:
+            await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
         await callback.bot.send_message(
             callback.from_user.id,
             "Главное меню",
@@ -726,11 +788,14 @@ async def event_choice(callback: CallbackQuery) -> None:
     apply_event_choice(state, event_id)
 
     if state["phase"] == "dead":
+        old_xp = await _get_user_xp(user_row[0])
         await db.update_run(run_id, state)
         await db.finish_run(run_id, state.get("floor", 0))
         await db.update_user_max_floor(user_row[0], state.get("floor", 0))
         await db.record_run_stats(user_row[0], state, died=True)
         await record_run_progress(user_row[0], state, died=True)
+        if callback.from_user:
+            await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
     else:
         await db.update_run(run_id, state)
 

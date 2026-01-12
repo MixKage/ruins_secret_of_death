@@ -10,6 +10,7 @@ def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> Inline
     else:
         builder.button(text="Начать забег", callback_data="menu:new")
     builder.button(text="Рейтинг", callback_data="menu:leaderboard")
+    builder.button(text="Сюжет", callback_data="menu:story")
     builder.button(text="Правила", callback_data="menu:rules")
     builder.button(text="Статистика", callback_data="menu:stats")
     builder.button(text="Личный кабинет", callback_data="menu:profile")
@@ -162,6 +163,16 @@ def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
     builder.button(text="<-", callback_data=f"menu:leaderboard:page:{page - 1}")
     builder.button(text="меню", callback_data="menu:main")
     builder.button(text="->", callback_data=f"menu:leaderboard:page:{page + 1}")
+    builder.adjust(3)
+    return builder.as_markup()
+
+def story_nav_kb(chapter: int, max_chapter: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if chapter > 1:
+        builder.button(text="Предыдущая", callback_data=f"story:chapter:{chapter - 1}")
+    builder.button(text="Меню", callback_data="menu:main")
+    if chapter < max_chapter:
+        builder.button(text="Следующая", callback_data=f"story:chapter:{chapter + 1}")
     builder.adjust(3)
     return builder.as_markup()
 
