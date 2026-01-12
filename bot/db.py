@@ -89,6 +89,7 @@ async def init_db() -> None:
                 username TEXT,
                 max_floor INTEGER DEFAULT 0,
                 xp INTEGER DEFAULT 0,
+                tutorial_done INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -188,6 +189,9 @@ async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
     columns = {row[1] for row in await cursor.fetchall()}
     if "xp" not in columns:
         await _execute(db, "ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0")
+        await db.commit()
+    if "tutorial_done" not in columns:
+        await _execute(db, "ALTER TABLE users ADD COLUMN tutorial_done INTEGER DEFAULT 0")
         await db.commit()
 
 
@@ -811,6 +815,28 @@ async def get_user_by_telegram(telegram_id: int) -> Optional[Tuple]:
             (telegram_id,),
         )
         return await cursor.fetchone()
+
+
+async def get_tutorial_done(telegram_id: int) -> bool:
+    async with _connect() as db:
+        cursor = await _execute(db, 
+            "SELECT tutorial_done FROM users WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        return bool(row[0])
+
+
+async def set_tutorial_done(telegram_id: int, done: bool) -> None:
+    value = 1 if done else 0
+    async with _connect() as db:
+        await _execute(db, 
+            "UPDATE users SET tutorial_done = ? WHERE telegram_id = ?",
+            (value, telegram_id),
+        )
+        await db.commit()
 
 
 async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
