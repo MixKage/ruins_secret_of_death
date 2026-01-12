@@ -16,6 +16,13 @@ async def start_handler(message: Message) -> None:
     if user is None:
         return
     user_id = await db.ensure_user(user.id, user.username)
+    tutorial_done = await db.get_tutorial_done(user.id)
+    if not tutorial_done:
+        await message.answer(
+            "<b>Обучение начинается.</b>\n"
+            "Следуйте подсказкам на экране."
+        )
+        return
     active_run = await db.get_active_run(user_id)
     is_admin = is_admin_id(user.id)
     await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb(bool(active_run), is_admin=is_admin))
