@@ -8,11 +8,14 @@ from .characters import (
     RUNE_GUARD_RETRIBUTION_PIERCE,
     RUNE_GUARD_RETRIBUTION_THRESHOLD,
     RUNE_GUARD_SHIELD_BONUS,
+    _berserk_damage_bonus,
+    _berserk_rage_state,
     _desperate_charge_accuracy_bonus,
+    _has_last_breath,
     _has_resolve,
     _has_steady_breath,
+    _is_berserk,
     _is_desperate_charge,
-    _is_last_breath,
     _is_rune_guard,
     apply_character_starting_stats,
     get_character,
@@ -162,6 +165,7 @@ def _refresh_turn_ap(state: Dict) -> None:
     if not player:
         return
     state["desperate_charge_used"] = False
+    state["berserk_kill_used"] = False
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
@@ -259,6 +263,9 @@ def _magic_scroll_damage(state: Dict, player: Dict, ap_max: int | None = None) -
     dmg = max(20, int(dmg))
     if _has_resolve(state, player):
         dmg = int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS)))
+    berserk_bonus = _berserk_damage_bonus(state, player)
+    if berserk_bonus:
+        dmg = int(round(dmg * (1.0 + berserk_bonus)))
     return dmg
 
 def _is_luck_maxed(player: Dict) -> bool:
@@ -712,6 +719,8 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "character_id": chosen_id,
         "ap_bonus": 0,
         "desperate_charge_used": False,
+        "berserk_kill_used": False,
+        "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
         "player": player,
@@ -878,6 +887,9 @@ def roll_damage(
     dmg = int(max(1, round(max(0.0, reduced_portion - armor) + bypass_portion)))
     if _has_resolve(state, player):
         dmg = max(1, int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS))))
+    berserk_bonus = _berserk_damage_bonus(state, player)
+    if berserk_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + berserk_bonus))))
     return dmg
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
@@ -938,7 +950,7 @@ def build_enemy_info_text(
             accuracy_bonus = _desperate_charge_accuracy_bonus(state_stub, player)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0) + accuracy_bonus
             enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
-            if not is_rune_guard and _is_last_breath(player):
+            if _has_last_breath(state_stub, player):
                 hit_chance = 1.0
             else:
                 hit_chance = _clamp(player_accuracy - enemy_evasion, 0.15, 0.95)
@@ -1012,8 +1024,9 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     alive_before = len(_alive_enemies(state["enemies"]))
 
     shadow_evaded = False
-    last_breath = _is_last_breath(player)
+    last_breath = _has_last_breath(state, player)
     is_rune_guard = _is_rune_guard(state)
+    is_berserk = _is_berserk(state)
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
         shadow_evaded = True
@@ -1065,11 +1078,18 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         else:
             _append_log(state, "Вы промахиваетесь.")
 
+    alive_after = len(_alive_enemies(state["enemies"]))
+    killed = max(0, alive_before - alive_after)
+    if killed > 0 and is_berserk and not state.get("berserk_kill_used"):
+        state["berserk_kill_used"] = True
+        ap_before = player.get("ap", 0)
+        player["ap"] = min(_effective_ap_max(state), ap_before + 1)
+        if player["ap"] > ap_before:
+            _append_log(state, "Кровавая добыча: +1 ОД за первое убийство в ход.")
+
     check_battle_end(state)
 
     if log_kills and alive_before > 3:
-        alive_after = len(_alive_enemies(state["enemies"]))
-        killed = max(0, alive_before - alive_after)
         _append_log(state, f"Побеждено врагов за ход: {killed}.")
 
 def player_use_potion(state: Dict) -> None:
@@ -1185,6 +1205,14 @@ def enemy_phase(state: Dict) -> None:
         else:
             _append_log(state, f"{enemy['name']} промахивается.")
         if player["hp"] <= 0:
+            if _is_berserk(state) and not state.get("berserk_second_wind_used"):
+                state["berserk_second_wind_used"] = True
+                player["hp"] = max(1, int(player.get("hp_max", 1)))
+                _append_log(
+                    state,
+                    "Неистовая живучесть: смертельный удар пережит, HP полностью восстановлено.",
+                )
+                continue
             player["hp"] = 0
             state["phase"] = "dead"
             _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
@@ -1591,8 +1619,8 @@ def render_state(state: Dict) -> str:
     character = get_character(state.get("character_id")) if state.get("character_id") else None
 
     is_rune_guard = _is_rune_guard(state)
-    last_breath_active = _is_last_breath(player)
-    desperate_charge_active = is_rune_guard and last_breath_active
+    last_breath_active = _has_last_breath(state, player)
+    desperate_charge_active = _is_desperate_charge(state, player)
     base_accuracy = player["accuracy"]
     accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
     effective_accuracy = _clamp(base_accuracy + accuracy_bonus, 0.0, 0.95)
@@ -1601,7 +1629,7 @@ def render_state(state: Dict) -> str:
             f"{_percent(base_accuracy, show_percent=False)} "
             f"(эфф. {_percent(effective_accuracy, show_percent=False)})"
         )
-    elif not is_rune_guard and last_breath_active:
+    elif last_breath_active:
         accuracy_display = "∞"
     else:
         accuracy_display = _percent(base_accuracy, show_percent=False)
@@ -1646,9 +1674,13 @@ def render_state(state: Dict) -> str:
     status_notes = []
     if _has_resolve(state, player):
         status_notes.append("Решимость — урон +20%")
+    rage_state = _berserk_rage_state(state, player)
+    if rage_state:
+        rage_name, rage_bonus = rage_state
+        status_notes.append(f"{rage_name} — урон +{int(round(rage_bonus * 100))}%")
     if is_rune_guard and desperate_charge_active:
         status_notes.append("Отчаянный рывок — 1-я атака 0 ОД, точность +25%")
-    if not is_rune_guard and last_breath_active:
+    if last_breath_active:
         status_notes.append("На последнем издыхании — точность 100%")
     if state.get("rune_guard_shield_active"):
         status_notes.append("Рунический заслон — броня +2")
@@ -1656,6 +1688,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("Расплата камня — бронепробой +30%")
     if state.get("ap_bonus"):
         status_notes.append("Ровное дыхание — ОД +1")
+    if _is_berserk(state) and not state.get("berserk_second_wind_used"):
+        status_notes.append("Неистовая живучесть — готово")
     if state.get("cursed_ap_ratio"):
         status_notes.append("Проклятие — ОД 3/4")
     if effective_evasion != base_evasion:

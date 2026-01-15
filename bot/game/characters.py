@@ -7,6 +7,7 @@ DESPERATE_CHARGE_THRESHOLD_RATIO = 1 / 3
 
 DEFAULT_CHARACTER_ID = "wanderer"
 RUNE_GUARD_ID = "rune_guard"
+BERSERK_ID = "berserk"
 RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
@@ -14,6 +15,14 @@ RUNE_GUARD_SHIELD_BONUS = 2.0
 RUNE_GUARD_RETRIBUTION_PIERCE = 0.3
 RUNE_GUARD_RETRIBUTION_THRESHOLD = 0.25
 RUNE_GUARD_AP_BONUS = 1
+BERSERK_HP_BONUS = 10
+BERSERK_ARMOR_PENALTY = 1.0
+BERSERK_RAGE_TIERS = [
+    ("Ярость I", 0.7, 0.10),
+    ("Ярость II", 0.4, 0.25),
+    ("Ярость III", 0.2, 0.45),
+    ("Ярость IV", 0.0, 0.65),
+]
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
@@ -36,6 +45,19 @@ CHARACTERS = {
             "Отчаянный рывок: при HP ≤ 1/3 1-я атака в ход стоит 0 ОД и точность +25%.",
         ],
     },
+    BERSERK_ID: {
+        "id": BERSERK_ID,
+        "name": "Берсерк",
+        "description": [
+            "HP +10, броня -1, уклонение без изменений.",
+            "Кровавая ярость I (HP 70-100%): урон +10%.",
+            "Кровавая ярость II (HP 40-69%): урон +25%.",
+            "Кровавая ярость III (HP 20-39%): урон +45%.",
+            "Кровавая ярость IV (HP 1-19%): урон +65%.",
+            "Кровавая добыча: первое убийство за ход восстанавливает 1 ОД.",
+            "Неистовая живучесть: первый смертельный удар за игру полностью восстанавливает HP.",
+        ],
+    },
 }
 
 
@@ -53,16 +75,25 @@ def resolve_character_id(character_id: str | None) -> str:
 
 
 def apply_character_starting_stats(player: Dict, character_id: str) -> None:
-    if character_id != RUNE_GUARD_ID:
+    if character_id == RUNE_GUARD_ID:
+        player["hp_max"] += RUNE_GUARD_HP_BONUS
+        player["hp"] += RUNE_GUARD_HP_BONUS
+        player["armor"] += RUNE_GUARD_ARMOR_BONUS
+        player["evasion"] = max(0.0, player["evasion"] - RUNE_GUARD_EVASION_PENALTY)
         return
-    player["hp_max"] += RUNE_GUARD_HP_BONUS
-    player["hp"] += RUNE_GUARD_HP_BONUS
-    player["armor"] += RUNE_GUARD_ARMOR_BONUS
-    player["evasion"] = max(0.0, player["evasion"] - RUNE_GUARD_EVASION_PENALTY)
+    if character_id == BERSERK_ID:
+        player["hp_max"] += BERSERK_HP_BONUS
+        player["hp"] += BERSERK_HP_BONUS
+        player["armor"] = float(player.get("armor", 0.0)) - BERSERK_ARMOR_PENALTY
+        return
 
 
 def _is_rune_guard(state: Dict) -> bool:
     return state.get("character_id") == RUNE_GUARD_ID
+
+
+def _is_berserk(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == BERSERK_ID
 
 
 def _is_default_character(state: Dict) -> bool:
@@ -87,6 +118,32 @@ def _has_steady_breath(state: Dict, player: Dict) -> bool:
 def _is_last_breath(player: Dict) -> bool:
     max_hp = max(1, int(player.get("hp_max", 1)))
     return player.get("hp", 0) <= max_hp * DESPERATE_CHARGE_THRESHOLD_RATIO
+
+
+def _has_last_breath(state: Dict, player: Dict) -> bool:
+    return _is_default_character(state) and _is_last_breath(player)
+
+
+def _berserk_rage_state(state: Dict, player: Dict) -> tuple[str, float] | None:
+    if not _is_berserk(state):
+        return None
+    hp_max = max(1, int(player.get("hp_max", 1)))
+    hp = max(0, int(player.get("hp", 0)))
+    if hp <= 0:
+        return None
+    ratio = hp / hp_max
+    for name, min_ratio, bonus in BERSERK_RAGE_TIERS:
+        if ratio >= min_ratio:
+            return name, bonus
+    name, _, bonus = BERSERK_RAGE_TIERS[-1]
+    return name, bonus
+
+
+def _berserk_damage_bonus(state: Dict, player: Dict) -> float:
+    rage = _berserk_rage_state(state, player)
+    if not rage:
+        return 0.0
+    return rage[1]
 
 
 def _is_desperate_charge(state: Dict, player: Dict | None = None) -> bool:
