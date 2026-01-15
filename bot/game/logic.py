@@ -16,12 +16,14 @@ from .characters import (
     _berserk_damage_bonus,
     _berserk_rage_state,
     _desperate_charge_accuracy_bonus,
+    _executioner_damage_bonus,
     _has_last_breath,
     _has_resolve,
     _has_steady_breath,
     _is_assassin,
     _is_berserk,
     _is_desperate_charge,
+    _is_executioner,
     _is_rune_guard,
     _is_hunter,
     _hunter_first_shot_bonus,
@@ -178,11 +180,15 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["assassin_echo_used"] = False
     state["hunter_first_shot_used"] = False
     state["hunter_kill_used"] = False
+    state["executioner_bleed_used"] = False
+    state["executioner_onslaught_used"] = False
+    state["executioner_heal_count"] = 0
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
         state["ap_bonus"] = 0
     player["ap"] = _effective_ap_max(state)
+    _apply_executioner_last_breath_penalty(state)
 
 def _apply_rune_guard_shield(state: Dict) -> None:
     if not _is_rune_guard(state):
@@ -215,6 +221,27 @@ def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
     if damage > hp_max * RUNE_GUARD_RETRIBUTION_THRESHOLD:
         state["rune_guard_retribution_ready"] = True
         _append_log(state, "Расплата камня: следующий удар игнорирует 30% брони.")
+
+
+def _apply_executioner_last_breath_penalty(state: Dict) -> None:
+    if not _is_executioner(state):
+        state["executioner_last_breath_turns"] = 0
+        return
+    player = state.get("player", {})
+    if not player:
+        return
+    if _has_last_breath(state, player):
+        turns = int(state.get("executioner_last_breath_turns", 0)) + 1
+        state["executioner_last_breath_turns"] = turns
+        if turns > 3:
+            player["hp"] -= 10
+            _append_log(state, "Цена смерти: -10 HP за затяжное издыхание.")
+            if player["hp"] <= 0:
+                player["hp"] = 0
+                state["phase"] = "dead"
+                _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
+    else:
+        state["executioner_last_breath_turns"] = 0
 
 
 def _hunter_transfer_mark(state: Dict) -> None:
@@ -759,6 +786,10 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "assassin_echo_used": False,
         "hunter_first_shot_used": False,
         "hunter_kill_used": False,
+        "executioner_bleed_used": False,
+        "executioner_onslaught_used": False,
+        "executioner_heal_count": 0,
+        "executioner_last_breath_turns": 0,
         "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
@@ -938,6 +969,9 @@ def roll_damage(
     hunter_bonus = _hunter_mark_bonus(state, target)
     if hunter_bonus:
         dmg = max(1, int(round(dmg * (1.0 + hunter_bonus))))
+    executioner_bonus = _executioner_damage_bonus(state, target)
+    if executioner_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + executioner_bonus))))
     return dmg
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
@@ -1058,6 +1092,19 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     player = state["player"]
     desperate_active = _is_desperate_charge(state, player)
     free_attack = desperate_active and not state.get("desperate_charge_used", False)
+    if (
+        _is_executioner(state)
+        and not state.get("executioner_onslaught_used")
+        and any(
+            enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
+            for enemy in state.get("enemies", [])
+        )
+    ):
+        state["executioner_onslaught_used"] = True
+        ap_before = player.get("ap", 0)
+        player["ap"] = min(_effective_ap_max(state), ap_before + 1)
+        if player["ap"] > ap_before:
+            _append_log(state, "Натиск: +1 ОД.")
     if player["ap"] <= 0 and not free_attack:
         _append_log(state, "Нет ОД для атаки.")
         return
@@ -1073,12 +1120,23 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         return
 
     alive_before = len(_alive_enemies(state["enemies"]))
+    bleeding_before = [
+        enemy
+        for enemy in state.get("enemies", [])
+        if enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
+    ]
+    bleeding_before = [
+        enemy
+        for enemy in state.get("enemies", [])
+        if enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
+    ]
 
     shadow_evaded = False
     target_killed = False
     last_breath = _has_last_breath(state, player)
     is_rune_guard = _is_rune_guard(state)
     is_assassin = _is_assassin(state)
+    is_executioner = _is_executioner(state)
     is_hunter = _is_hunter(state)
     assassin_shadow = _assassin_shadow_active(state, player)
     is_berserk = _is_berserk(state)
@@ -1108,6 +1166,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                 state.get("floor"),
             )
     if hit:
+        executioner_bleed_ready = is_executioner and not state.get("executioner_bleed_used")
         retribution_ready = state.get("rune_guard_retribution_ready", False)
         armor_pierce_bonus = (
             RUNE_GUARD_RETRIBUTION_PIERCE if retribution_ready else 0.0
@@ -1122,6 +1181,12 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                 enemy.pop("hunter_mark", None)
             target["hunter_mark"] = True
             _append_log(state, f"Охотничья метка: цель {target['name']} отмечена.")
+        if executioner_bleed_ready:
+            state["executioner_bleed_used"] = True
+            bleed_damage = max(1, int(weapon.get("bleed_damage", 0)))
+            target["bleed_turns"] = max(target["bleed_turns"], 2)
+            target["bleed_damage"] = max(target["bleed_damage"], bleed_damage)
+            _append_log(state, f"{target['name']} истекает кровью.")
         if retribution_ready and armor_pierce_bonus > 0:
             state["rune_guard_retribution_ready"] = False
             _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
@@ -1138,7 +1203,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                     _apply_stone_skin(state, enemy)
                 _append_log(state, f"Сплэш урон: {splash_damage} по {len(hit_targets)} врагам.")
 
-        if weapon["bleed_chance"] > 0 and random.random() < weapon["bleed_chance"]:
+        if not executioner_bleed_ready and weapon["bleed_chance"] > 0 and random.random() < weapon["bleed_chance"]:
             target["bleed_turns"] = max(target["bleed_turns"], 2)
             target["bleed_damage"] = max(target["bleed_damage"], weapon["bleed_damage"])
             _append_log(state, f"{target['name']} истекает кровью.")
@@ -1167,6 +1232,12 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             _append_log(state, f"Эхо убийства: {echo_damage} урона по {len(echo_targets)} врагам.")
         alive_after = len(_alive_enemies(state["enemies"]))
         killed = max(0, alive_before - alive_after)
+    if is_executioner and bleeding_before:
+        for enemy in bleeding_before:
+            if enemy.get("hp", 0) <= 0 and state.get("executioner_heal_count", 0) < 2:
+                state["executioner_heal_count"] = int(state.get("executioner_heal_count", 0)) + 1
+                player["hp"] = min(player.get("hp_max", 0), player.get("hp", 0) + 5)
+                _append_log(state, "Приговор: +5 HP за убийство кровоточащего врага.")
     if killed > 0 and is_berserk and not state.get("berserk_kill_used"):
         state["berserk_kill_used"] = True
         ap_before = player.get("ap", 0)
@@ -1245,6 +1316,9 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
             mark_bonus = _hunter_mark_bonus(state, enemy)
             if mark_bonus:
                 enemy_damage = max(1, int(round(enemy_damage * (1.0 + mark_bonus))))
+            exec_bonus = _executioner_damage_bonus(state, enemy)
+            if exec_bonus:
+                enemy_damage = max(1, int(round(enemy_damage * (1.0 + exec_bonus))))
             enemy["hp"] -= enemy_damage
             _apply_stone_skin(state, enemy)
         _append_log(state, f"Вы читаете {scroll['name']}: молнии бьют по всем врагам на {damage} урона.")
@@ -1253,6 +1327,9 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         mark_bonus = _hunter_mark_bonus(state, target)
         if mark_bonus:
             target_damage = max(1, int(round(target_damage * (1.0 + mark_bonus))))
+        exec_bonus = _executioner_damage_bonus(state, target)
+        if exec_bonus:
+            target_damage = max(1, int(round(target_damage * (1.0 + exec_bonus))))
         target["hp"] -= target_damage
         _apply_stone_skin(state, target)
         _apply_freeze(target)
@@ -1262,6 +1339,9 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         mark_bonus = _hunter_mark_bonus(state, target)
         if mark_bonus:
             target_damage = max(1, int(round(target_damage * (1.0 + mark_bonus))))
+        exec_bonus = _executioner_damage_bonus(state, target)
+        if exec_bonus:
+            target_damage = max(1, int(round(target_damage * (1.0 + exec_bonus))))
         target["hp"] -= target_damage
         _apply_stone_skin(state, target)
         _apply_burn(target, target_damage)
@@ -1284,6 +1364,13 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
                 _apply_stone_skin(state, enemy)
             if echo_targets:
                 _append_log(state, f"Эхо убийства: {echo_damage} урона по {len(echo_targets)} врагам.")
+    if _is_executioner(state) and bleeding_before:
+        player = state.get("player", {})
+        for enemy in bleeding_before:
+            if enemy.get("hp", 0) <= 0 and state.get("executioner_heal_count", 0) < 2:
+                state["executioner_heal_count"] = int(state.get("executioner_heal_count", 0)) + 1
+                player["hp"] = min(player.get("hp_max", 0), player.get("hp", 0) + 5)
+                _append_log(state, "Приговор: +5 HP за убийство кровоточащего врага.")
 
     check_battle_end(state)
 
@@ -1818,6 +1905,24 @@ def render_state(state: Dict) -> str:
         status_notes.append("Гон по следу — +1 ОД за первое убийство")
     if _is_hunter(state) and any(enemy.get("hunter_mark") for enemy in state.get("enemies", [])):
         status_notes.append("Охотничья метка — активна")
+    if _is_executioner(state) and not state.get("executioner_bleed_used"):
+        status_notes.append("Точность мясника — кровотечение")
+    if (
+        _is_executioner(state)
+        and not state.get("executioner_onslaught_used")
+        and any(
+            enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
+            for enemy in state.get("enemies", [])
+        )
+    ):
+        status_notes.append("Натиск — +1 ОД на следующую атаку")
+    if _is_executioner(state):
+        heals_left = max(0, 2 - int(state.get("executioner_heal_count", 0)))
+        status_notes.append(f"Приговор — лечений {heals_left}/2")
+    if _is_executioner(state):
+        turns = int(state.get("executioner_last_breath_turns", 0))
+        if turns > 0:
+            status_notes.append(f"Цена смерти — {turns}/3")
     rage_state = _berserk_rage_state(state, player)
     if rage_state:
         rage_name, rage_bonus = rage_state

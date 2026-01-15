@@ -10,6 +10,7 @@ RUNE_GUARD_ID = "rune_guard"
 BERSERK_ID = "berserk"
 ASSASSIN_ID = "assassin"
 HUNTER_ID = "hunter"
+EXECUTIONER_ID = "executioner"
 RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
@@ -38,6 +39,10 @@ HUNTER_EVASION_BONUS = 0.05
 HUNTER_ACCURACY_BONUS = 0.10
 HUNTER_MARK_DAMAGE_BONUS = 0.25
 HUNTER_FIRST_SHOT_BONUS = 0.10
+EXECUTIONER_HP_BONUS = 4
+EXECUTIONER_ARMOR_BONUS = 1.0
+EXECUTIONER_EVASION_PENALTY = 0.05
+EXECUTIONER_BLEED_DAMAGE_BONUS = 0.25
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
@@ -98,6 +103,19 @@ CHARACTERS = {
             "На последнем издыхании: при HP ≤ 1/3 точность 100%.",
         ],
     },
+    EXECUTIONER_ID: {
+        "id": EXECUTIONER_ID,
+        "name": "Палач",
+        "description": [
+            "HP +4, броня +1, уклонение -5%, точность без изменений.",
+            "Точность мясника: первая атака в ход гарантированно накладывает кровотечение.",
+            "Жатва: по кровоточащим целям урон +25%.",
+            "Приговор: убийство кровоточащего врага лечит 5 HP (до 2 раз за ход).",
+            "Натиск: если есть кровотечение, следующая атака в ход получает +1 ОД.",
+            "На последнем издыхании: при HP ≤ 1/3 точность 100%.",
+            "Цена смерти: после 3 ходов на последнем издыхании получает -10 HP.",
+        ],
+    },
 }
 
 
@@ -142,6 +160,12 @@ def apply_character_starting_stats(player: Dict, character_id: str) -> None:
         player["evasion"] = float(player.get("evasion", 0.0)) + HUNTER_EVASION_BONUS
         player["accuracy"] = float(player.get("accuracy", 0.0)) + HUNTER_ACCURACY_BONUS
         return
+    if character_id == EXECUTIONER_ID:
+        player["hp_max"] = max(1, int(player.get("hp_max", 1)) + EXECUTIONER_HP_BONUS)
+        player["hp"] = min(player["hp_max"], int(player.get("hp", player["hp_max"])) + EXECUTIONER_HP_BONUS)
+        player["armor"] = float(player.get("armor", 0.0)) + EXECUTIONER_ARMOR_BONUS
+        player["evasion"] = float(player.get("evasion", 0.0)) - EXECUTIONER_EVASION_PENALTY
+        return
 
 
 def _is_rune_guard(state: Dict) -> bool:
@@ -158,6 +182,10 @@ def _is_assassin(state: Dict) -> bool:
 
 def _is_hunter(state: Dict) -> bool:
     return resolve_character_id(state.get("character_id")) == HUNTER_ID
+
+
+def _is_executioner(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == EXECUTIONER_ID
 
 
 def _is_default_character(state: Dict) -> bool:
@@ -185,7 +213,7 @@ def _is_last_breath(player: Dict) -> bool:
 
 
 def _has_last_breath(state: Dict, player: Dict) -> bool:
-    return (_is_default_character(state) or _is_hunter(state)) and _is_last_breath(player)
+    return (_is_default_character(state) or _is_hunter(state) or _is_executioner(state)) and _is_last_breath(player)
 
 
 def _berserk_rage_state(state: Dict, player: Dict) -> tuple[str, float] | None:
@@ -251,6 +279,12 @@ def _hunter_mark_bonus(state: Dict, target: Dict) -> float:
 def _hunter_first_shot_bonus(state: Dict) -> float:
     if _is_hunter(state):
         return HUNTER_FIRST_SHOT_BONUS
+    return 0.0
+
+
+def _executioner_damage_bonus(state: Dict, target: Dict) -> float:
+    if _is_executioner(state) and target.get("bleed_turns", 0) > 0:
+        return EXECUTIONER_BLEED_DAMAGE_BONUS
     return 0.0
 
 
