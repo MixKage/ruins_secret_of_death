@@ -10,9 +10,11 @@ from bot.game.logic import (
     apply_treasure_choice,
     build_enemy_info_text,
     build_fallen_boss_intro,
+    CHARACTERS,
     count_potions,
     end_turn,
     enforce_ap_cap,
+    is_desperate_charge_available,
     new_run_state,
     new_tutorial_state,
     _append_log,
@@ -30,6 +32,7 @@ from bot.game.logic import (
 from bot.keyboards import (
     battle_kb,
     boss_artifact_kb,
+    character_select_kb,
     event_kb,
     inventory_kb,
     potion_kb,
@@ -47,6 +50,20 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
 
+def _character_select_text() -> str:
+    lines = [
+        "<b>Выберите героя</b>",
+        "Выбор действует только на текущий забег.",
+        "",
+    ]
+    for character in CHARACTERS.values():
+        name = character.get("name", "Герой")
+        lines.append(f"<b>{name}</b>")
+        for desc in character.get("description", []):
+            lines.append(f"- {desc}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
     if callback.message:
@@ -57,6 +74,11 @@ async def _show_main_menu(callback: CallbackQuery, text: str = "Главное �
             text,
             reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin),
         )
+
+async def _show_character_select(callback: CallbackQuery) -> None:
+    text = _character_select_text()
+    markup = character_select_kb(list(CHARACTERS.values()))
+    await edit_or_send(callback, text, reply_markup=markup)
 
 async def _show_tutorial_failed(callback: CallbackQuery, state: dict) -> None:
     reason = state.get("tutorial_fail_reason")
@@ -218,7 +240,7 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
 def _battle_markup(state: dict):
     player = state["player"]
     has_potion = bool(player.get("potions"))
-    can_attack = player["ap"] > 0
+    can_attack = player["ap"] > 0 or is_desperate_charge_available(state)
     can_attack_all = player["ap"] > 1
     can_endturn = player["ap"] <= 0 or tutorial_force_endturn(state)
     show_info = bool(state.get("show_info"))
@@ -334,9 +356,33 @@ async def start_new_run(callback: CallbackQuery) -> None:
         await record_run_progress(user_id, state, died=False)
         if callback.from_user:
             await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
+    await callback.answer()
+    await _show_character_select(callback)
 
-    state = new_run_state()
-    run_id = await db.create_run(user_id, state)
+@router.callback_query(F.data.startswith("hero:select:"))
+async def select_character(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+    user = callback.from_user
+    if user is None:
+        return
+    if not await db.get_tutorial_done(user.id):
+        await callback.answer("Сначала пройдите обучение.", show_alert=True)
+        return
+    character_id = callback.data.split(":")[-1]
+    if character_id not in CHARACTERS:
+        await callback.answer("Герой недоступен.", show_alert=True)
+        await _show_character_select(callback)
+        return
+    active = await db.get_active_run(user_row[0])
+    if active:
+        await callback.answer("У вас уже есть активный забег.", show_alert=True)
+        run_id, state = active
+        await _send_state(callback, state, run_id)
+        return
+    state = new_run_state(character_id=character_id)
+    run_id = await db.create_run(user_row[0], state)
     await callback.answer()
     await _send_state(callback, state, run_id)
 

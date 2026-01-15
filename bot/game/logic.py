@@ -2,11 +2,53 @@ import copy
 import random
 from typing import Dict, List, Tuple
 
+from .characters import (
+    CHARACTERS,
+    RUNE_GUARD_AP_BONUS,
+    RUNE_GUARD_RETRIBUTION_PIERCE,
+    RUNE_GUARD_RETRIBUTION_THRESHOLD,
+    RUNE_GUARD_SHIELD_BONUS,
+    _desperate_charge_accuracy_bonus,
+    _has_resolve,
+    _has_steady_breath,
+    _is_desperate_charge,
+    _is_last_breath,
+    _is_rune_guard,
+    apply_character_starting_stats,
+    get_character,
+    is_desperate_charge_available,
+    resolve_character_id,
+)
+from .combat_utils import _alive_enemies, _first_alive, _tally_kills
+from .common import MESSAGE_LIMIT, _append_log, _clamp, _percent, _trim_lines_to_limit
 from .data import CHEST_LOOT, ENEMIES, SCROLLS, UPGRADES, WEAPONS, get_scroll_by_id, get_upgrade_by_id, get_weapon_by_id
+from .effects import _apply_burn, _apply_freeze
+from .items import (
+    POTION_LIMITS,
+    _add_potion,
+    _add_scroll,
+    _fill_potions,
+    _grant_lightning_scroll,
+    _grant_medium_potion,
+    _grant_random_scroll,
+    _grant_small_potion,
+    _grant_strong_potion,
+    _potion_stats,
+    count_potions,
+)
+from .tutorial import (
+    TUTORIAL_DEFAULT_CONFIG,
+    TUTORIAL_SCENE_NAME,
+    TUTORIAL_TOTAL_STEPS,
+    new_tutorial_state,
+    tutorial_apply_action,
+    tutorial_expected_action,
+    tutorial_force_endturn,
+    tutorial_hint,
+    tutorial_prompt,
+    tutorial_use_scroll,
+)
 
-MAX_LOG_LINES = 4
-MESSAGE_LIMIT = 4096
-INFO_TRUNCATED_LINE = "<i>Справка обрезана.</i>"
 TREASURE_REWARD_XP = 5
 
 ENEMY_DAMAGE_BUDGET_RATIO = 0.4
@@ -22,12 +64,6 @@ ARMOR_CAP_BEFORE_50 = 4
 ARMOR_CAP_BEFORE_100 = 6
 EVASION_CAP_BEFORE_50 = 0.4
 EVASION_CAP_BEFORE_100 = 0.8
-
-POTION_LIMITS = {
-    "potion_small": 10,
-    "potion_medium": 5,
-    "potion_strong": 2,
-}
 
 CURSED_FLOOR_MIN_FLOOR = 50
 CURSED_AP_RATIO = 0.75
@@ -65,49 +101,6 @@ STONE_SKIN_MAX_BONUS = 5.0
 ELITE_NAME_PREFIX = "Проклятый"
 SURVIVE_ONE_TURN_FLOOR = 50
 
-TUTORIAL_TOTAL_STEPS = 10
-TUTORIAL_SCENE_NAME = "Плац у казармы"
-TUTORIAL_DEFAULT_CONFIG = {
-    "player_hit": 6,
-    "scroll_hit": 8,
-    "enemy_hit": 8,
-    "last_breath_hp": 9,
-}
-TUTORIAL_STEP_ACTIONS = {
-    1: "info",
-    2: "attack",
-    3: "attack_all",
-    4: "endturn",
-    5: "potion",
-    6: "scroll",
-    7: "endturn",
-    8: None,
-    9: "attack",
-    10: "attack",
-}
-TUTORIAL_STEP_PROMPTS = {
-    1: "Нажмите «Справка», чтобы изучить противника.",
-    2: "Атакуйте один раз (1 ОД).",
-    3: "Используйте «Атаковать на все ОД».",
-    4: "Завершите ход — враг ответит.",
-    5: "Используйте малое зелье.",
-    6: "Откройте инвентарь и примените ледяной свиток.",
-    7: "Завершите ход — враг пропустит его.",
-    9: "Атакуйте (1 ОД).",
-    10: "Добейте врага ещё одной атакой.",
-}
-TUTORIAL_STEP_HINTS = {
-    1: "Сначала нажмите «Справка».",
-    2: "Сейчас нужна атака на 1 ОД.",
-    3: "Нажмите «Атаковать на все ОД».",
-    4: "Завершите ход.",
-    5: "Используйте зелье, чтобы восстановиться.",
-    6: "Нужно применить ледяной свиток из инвентаря.",
-    7: "Завершите ход, чтобы увидеть эффект льда.",
-    9: "Атакуйте врага (1 ОД).",
-    10: "Добейте врага атакой (1 ОД).",
-}
-
 BOSS_ARTIFACT_OPTIONS = [
     {
         "id": "artifact_power",
@@ -144,42 +137,17 @@ DAUGHTER_INTRO_LINES = [
     "<i>Это не бой — это приговор. Выдержите.</i>",
 ]
 
-def _append_log(state: Dict, message: str) -> None:
-    state.setdefault("log", []).append(message)
-    state["log"] = state["log"][-MAX_LOG_LINES:]
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-def _percent(value: float, show_percent: bool = True) -> str:
-    percent_value = int(round(value * 100))
-    return f"{percent_value}%" if show_percent else str(percent_value)
-
-def _trim_lines_to_limit(lines: List[str], limit: int) -> List[str]:
-    if limit <= 0:
-        return []
-    result = []
-    current_len = 0
-    for line in lines:
-        add_len = len(line) + (1 if result else 0)
-        if current_len + add_len > limit:
-            break
-        result.append(line)
-        current_len += add_len
-    if len(result) < len(lines):
-        trunc_line = INFO_TRUNCATED_LINE
-        add_len = len(trunc_line) + (1 if result else 0)
-        if current_len + add_len <= limit:
-            result.append(trunc_line)
-    return result
-
 def _effective_ap_max(state: Dict) -> int:
     player = state.get("player", {})
     ap_max = max(1, int(player.get("ap_max", 1)))
+    bonus = int(state.get("ap_bonus", 0) or 0)
+    effective = ap_max
     ratio = state.get("cursed_ap_ratio")
-    if not ratio:
-        return ap_max
-    return max(1, int(ap_max * ratio))
+    if ratio:
+        effective = max(1, int(effective * ratio))
+    cap = _ap_max_cap_for_floor(state.get("floor", 1))
+    effective = min(cap, effective + max(0, bonus))
+    return max(1, int(effective))
 
 def _apply_cursed_ap(state: Dict) -> bool:
     player = state.get("player", {})
@@ -188,6 +156,49 @@ def _apply_cursed_ap(state: Dict) -> bool:
         player["ap"] = effective
         return True
     return False
+
+def _refresh_turn_ap(state: Dict) -> None:
+    player = state.get("player", {})
+    if not player:
+        return
+    state["desperate_charge_used"] = False
+    if _has_steady_breath(state, player):
+        state["ap_bonus"] = RUNE_GUARD_AP_BONUS
+    else:
+        state["ap_bonus"] = 0
+    player["ap"] = _effective_ap_max(state)
+
+def _apply_rune_guard_shield(state: Dict) -> None:
+    if not _is_rune_guard(state):
+        return
+    if state.get("rune_guard_shield_active"):
+        return
+    player = state.get("player", {})
+    if player.get("ap", 0) > 0:
+        return
+    player["armor"] = float(player.get("armor", 0.0)) + RUNE_GUARD_SHIELD_BONUS
+    state["rune_guard_shield_active"] = True
+    _append_log(state, "Рунический заслон: броня +2 до конца хода врагов.")
+
+def _clear_rune_guard_shield(state: Dict) -> None:
+    if not state.get("rune_guard_shield_active"):
+        return
+    player = state.get("player", {})
+    player["armor"] = max(0.0, float(player.get("armor", 0.0)) - RUNE_GUARD_SHIELD_BONUS)
+    state["rune_guard_shield_active"] = False
+
+def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
+    if not _is_rune_guard(state):
+        return
+    if state.get("rune_guard_retribution_ready"):
+        return
+    player = state.get("player", {})
+    hp_max = int(player.get("hp_max", 0))
+    if hp_max <= 0:
+        return
+    if damage > hp_max * RUNE_GUARD_RETRIBUTION_THRESHOLD:
+        state["rune_guard_retribution_ready"] = True
+        _append_log(state, "Расплата камня: следующий удар игнорирует 30% брони.")
 
 def _roll_cursed_floor(floor: int) -> bool:
     if floor < CURSED_FLOOR_MIN_FLOOR:
@@ -240,98 +251,18 @@ def _apply_stone_skin(state: Dict, enemy: Dict) -> None:
         enemy["armor"] = new_armor
         _append_log(state, f"{enemy['name']} каменеет: броня усиливается.")
 
-def _magic_scroll_damage(player: Dict, ap_max: int | None = None) -> int:
+def _magic_scroll_damage(state: Dict, player: Dict, ap_max: int | None = None) -> int:
     weapon = player.get("weapon", {})
     max_weapon = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
     ap_value = int(ap_max if ap_max is not None else player.get("ap_max", 1))
     dmg = max_weapon * ap_value
     dmg = max(20, int(dmg))
-    if _has_resolve(player):
+    if _has_resolve(state, player):
         dmg = int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS)))
     return dmg
 
-def _apply_burn(enemy: Dict, damage: int) -> None:
-    enemy["burn_turns"] = max(enemy.get("burn_turns", 0), 1)
-    enemy["burn_damage"] = max(enemy.get("burn_damage", 0), damage)
-
-
-
-
-def _potion_stats(player: Dict, potion_id: str) -> Tuple[int, int]:
-    for potion in player.get("potions", []):
-        if potion.get("id") == potion_id:
-            return int(potion.get("heal", 0)), int(potion.get("ap_restore", 0))
-    fallback = get_upgrade_by_id(potion_id)
-    if fallback:
-        return int(fallback.get("heal", 0)), int(fallback.get("ap_restore", 0))
-    return 0, 0
-
-def count_potions(player: Dict, potion_id: str) -> int:
-    return sum(1 for potion in player.get("potions", []) if potion.get("id") == potion_id)
-
-
-def _potion_limit(potion_id: str) -> int:
-    return POTION_LIMITS.get(potion_id, 999)
-
-
-def _add_potion(player: Dict, potion: Dict | None, count: int = 1) -> Tuple[int, int]:
-    if not potion or count <= 0:
-        return 0, 0
-    potion_id = potion.get("id")
-    if not potion_id:
-        for _ in range(count):
-            player.setdefault("potions", []).append(copy.deepcopy(potion))
-        return count, 0
-    limit = _potion_limit(potion_id)
-    current = count_potions(player, potion_id)
-    space = max(0, limit - current)
-    to_add = min(space, count)
-    for _ in range(to_add):
-        player.setdefault("potions", []).append(copy.deepcopy(potion))
-    return to_add, count - to_add
-
-def _fill_potions(player: Dict, ratio: float = 1.0) -> Dict[str, int]:
-    added_counts: Dict[str, int] = {}
-    for potion_id in ("potion_small", "potion_medium", "potion_strong"):
-        limit = _potion_limit(potion_id)
-        target = max(1, int(limit * ratio)) if limit > 0 else 0
-        current = count_potions(player, potion_id)
-        if current >= target:
-            continue
-        potion = copy.deepcopy(get_upgrade_by_id(potion_id))
-        if not potion:
-            continue
-        to_add = target - current
-        added, _ = _add_potion(player, potion, count=to_add)
-        if added:
-            added_counts[potion_id] = added
-    return added_counts
-
-
-def _add_scroll(player: Dict, scroll: Dict | None) -> Dict | None:
-    if not scroll:
-        return None
-    if not isinstance(player.get("scrolls"), list):
-        player["scrolls"] = []
-    added = copy.deepcopy(scroll)
-    player["scrolls"].append(added)
-    return added
-
-
-def _apply_freeze(enemy: Dict) -> None:
-    enemy["skip_turns"] = max(enemy.get("skip_turns", 0), 1)
-
-
-
 def _is_luck_maxed(player: Dict) -> bool:
     return player.get("luck", 0.0) >= LUCK_MAX
-
-
-def _has_resolve(player: Dict) -> bool:
-    hp_max = int(player.get("hp_max", 0))
-    if hp_max <= 0:
-        return False
-    return player.get("hp", 0) >= hp_max
 
 
 def _ap_max_cap_for_floor(floor: int) -> int:
@@ -423,34 +354,6 @@ def _effective_evasion(evasion: float, floor: int | None) -> float:
         return evasion
     reduction = min(EVASION_REDUCTION_MAX, EVASION_REDUCTION_PER_FLOOR * (floor - EVASION_REDUCTION_START_FLOOR))
     return max(0.0, evasion * (1.0 - reduction))
-
-def _is_last_breath(player: Dict, floor: int) -> bool:
-    max_hp = max(1, int(player.get("hp_max", 1)))
-    return player["hp"] <= max_hp / 3
-
-def _grant_small_potion(player: Dict) -> Tuple[int, int]:
-    potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
-    return _add_potion(player, potion, count=1)
-
-def _grant_medium_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
-    potion = copy.deepcopy(get_upgrade_by_id("potion_medium"))
-    return _add_potion(player, potion, count=count)
-
-
-
-
-def _grant_strong_potion(player: Dict, count: int = 1) -> Tuple[int, int]:
-    potion = copy.deepcopy(get_upgrade_by_id("potion_strong"))
-    return _add_potion(player, potion, count=count)
-def _grant_random_scroll(player: Dict) -> Dict | None:
-    if not SCROLLS:
-        return None
-    scroll = random.choice(SCROLLS)
-    return _add_scroll(player, scroll)
-
-def _grant_lightning_scroll(player: Dict) -> Dict | None:
-    scroll = copy.deepcopy(get_scroll_by_id("scroll_lightning"))
-    return _add_scroll(player, scroll)
 
 def _mutate_enemy_template(template: Dict, prefix: str, info_suffix: str) -> Dict:
     mutated = copy.deepcopy(template)
@@ -690,12 +593,13 @@ def build_fallen_boss_intro(boss_name: str) -> List[str]:
         f"Когда-то павший в этих руинах герой <b>{boss_name}</b> был поднят темной силой и идет в атаку на вас!",
     ]
 
-def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
+def build_late_boss(player: Dict, floor: int, boss_name: str, character_id: str | None = None) -> Dict:
     steps = max(1, (floor - BOSS_FLOOR) // LATE_BOSS_FLOOR_STEP)
     weapon = player.get("weapon", {})
     max_hit = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
     avg_hit = (int(weapon.get("min_dmg", 0)) + int(weapon.get("max_dmg", 0))) / 2 + int(player.get("power", 0))
-    resolve_mult = 1.2 if _has_resolve(player) else 1.0
+    state_stub = {"character_id": character_id}
+    resolve_mult = 1.2 if _has_resolve(state_stub, player) else 1.0
     turn_burst = max(1, max_hit * int(player.get("ap_max", 1)) * resolve_mult)
 
     hp_base = max(player.get("hp_max", 0) * 3.0, turn_burst * 1.8)
@@ -733,13 +637,14 @@ def build_late_boss(player: Dict, floor: int, boss_name: str) -> Dict:
         "max_floor": floor,
     }
 
-def build_daughter_boss(player: Dict, floor: int) -> Dict:
+def build_daughter_boss(player: Dict, floor: int, character_id: str | None = None) -> Dict:
     steps = max(1, floor // ULTIMATE_BOSS_FLOOR_STEP)
     power_mult = DAUGHTER_BOSS_BASE_MULT + (steps - 1) * DAUGHTER_BOSS_STEP_BONUS
     weapon = player.get("weapon", {})
     max_hit = int(weapon.get("max_dmg", 0)) + int(player.get("power", 0))
     avg_hit = (int(weapon.get("min_dmg", 0)) + int(weapon.get("max_dmg", 0))) / 2 + int(player.get("power", 0))
-    resolve_mult = 1.2 if _has_resolve(player) else 1.0
+    state_stub = {"character_id": character_id}
+    resolve_mult = 1.2 if _has_resolve(state_stub, player) else 1.0
     burst = max_hit * int(player.get("ap_max", 1)) * resolve_mult
 
     hp_base = max(player.get("hp_max", 0) * 4.5, burst * 3.0, 2000)
@@ -777,10 +682,11 @@ def build_daughter_boss(player: Dict, floor: int) -> Dict:
         "max_floor": floor,
     }
 
-def new_run_state() -> Dict:
+def new_run_state(character_id: str | None = None) -> Dict:
     weapon = copy.deepcopy(random.choice(_weapons_for_floor(1)))
     potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
     ice_scroll = copy.deepcopy(get_scroll_by_id("scroll_ice"))
+    chosen_id = resolve_character_id(character_id)
     player = {
         "hp": 30,
         "hp_max": 30,
@@ -795,6 +701,7 @@ def new_run_state() -> Dict:
         "potions": [],
         "scrolls": [],
     }
+    apply_character_starting_stats(player, chosen_id)
     if potion:
         _add_potion(player, potion, count=1)
     if ice_scroll:
@@ -802,6 +709,11 @@ def new_run_state() -> Dict:
     state = {
         "floor": 1,
         "phase": "battle",
+        "character_id": chosen_id,
+        "ap_bonus": 0,
+        "desperate_charge_used": False,
+        "rune_guard_shield_active": False,
+        "rune_guard_retribution_ready": False,
         "player": player,
         "enemies": generate_enemy_group(1, player),
         "rewards": [],
@@ -819,309 +731,10 @@ def new_run_state() -> Dict:
         "cursed_ap_ratio": None,
         "log": [],
     }
+    _refresh_turn_ap(state)
     _append_log(state, f"Вы нашли <b>{weapon['name']}</b> и спускаетесь на этаж <b>1</b>.")
     return state
 
-
-def new_tutorial_state() -> Dict:
-    weapon = {
-        "id": "tutorial_blade",
-        "name": "Учебный клинок",
-        "min_dmg": 6,
-        "max_dmg": 6,
-        "accuracy_bonus": 0.0,
-        "splash_ratio": 0.0,
-        "bleed_chance": 0.0,
-        "bleed_damage": 0,
-        "armor_pierce": 0.0,
-        "min_floor": 1,
-        "max_floor": 1,
-        "level": 1,
-    }
-    potion = copy.deepcopy(get_upgrade_by_id("potion_small"))
-    ice_scroll = copy.deepcopy(get_scroll_by_id("scroll_ice"))
-    player = {
-        "hp": 30,
-        "hp_max": 30,
-        "ap": 3,
-        "ap_max": 3,
-        "armor": 0.0,
-        "accuracy": 0.7,
-        "evasion": 0.05,
-        "power": 0,
-        "luck": 0.2,
-        "weapon": weapon,
-        "potions": [],
-        "scrolls": [],
-    }
-    if potion:
-        _add_potion(player, potion, count=1)
-    if ice_scroll:
-        _add_scroll(player, ice_scroll)
-    enemy = {
-        "id": "tutorial_recruit",
-        "name": "Учебный рекрут у казармы",
-        "hp": 34,
-        "max_hp": 34,
-        "attack": 8,
-        "armor": 0.0,
-        "armor_pierce": 0.0,
-        "accuracy": 1.0,
-        "evasion": 0.0,
-        "always_hit": True,
-        "bleed_turns": 0,
-        "bleed_damage": 0,
-        "burn_turns": 0,
-        "burn_damage": 0,
-        "skip_turns": 0,
-        "counted_dead": False,
-        "info": "Новобранец, отрабатывающий удары на плацу.",
-        "danger": "учебный",
-        "min_floor": 1,
-        "max_floor": 1,
-    }
-    state = {
-        "floor": 1,
-        "phase": "tutorial",
-        "tutorial": True,
-        "tutorial_step": 1,
-        "tutorial_scene": TUTORIAL_SCENE_NAME,
-        "tutorial_config": dict(TUTORIAL_DEFAULT_CONFIG),
-        "tutorial_flags": {},
-        "player": player,
-        "enemies": [enemy],
-        "rewards": [],
-        "treasure_reward": None,
-        "event_options": [],
-        "boss_artifacts": [],
-        "show_info": False,
-        "kills": {},
-        "treasures_found": 0,
-        "chests_opened": 0,
-        "boss_defeated": False,
-        "boss_kind": None,
-        "boss_name": None,
-        "boss_intro_lines": None,
-        "cursed_ap_ratio": None,
-        "log": [],
-    }
-    _append_log(state, "<b>Плац у казармы.</b> Вы готовитесь к первым ударам.")
-    _tutorial_log_step_prompt(state)
-    return state
-
-
-def tutorial_expected_action(state: Dict) -> str | None:
-    step = int(state.get("tutorial_step", 1))
-    return TUTORIAL_STEP_ACTIONS.get(step)
-
-
-def tutorial_prompt(state: Dict) -> str:
-    step = int(state.get("tutorial_step", 1))
-    return TUTORIAL_STEP_PROMPTS.get(step, "")
-
-
-def tutorial_hint(state: Dict) -> str:
-    step = int(state.get("tutorial_step", 1))
-    return TUTORIAL_STEP_HINTS.get(step, "Следуйте подсказке.")
-
-
-def _tutorial_log_step_prompt(state: Dict) -> None:
-    prompt = tutorial_prompt(state)
-    if not prompt:
-        return
-    flags = state.setdefault("tutorial_flags", {})
-    step = int(state.get("tutorial_step", 1))
-    if flags.get("last_prompt_step") == step:
-        return
-    _append_log(state, prompt)
-    flags["last_prompt_step"] = step
-
-
-def tutorial_force_endturn(state: Dict) -> bool:
-    return bool(state.get("tutorial")) and tutorial_expected_action(state) == "endturn"
-
-
-def tutorial_apply_action(state: Dict, action: str) -> str:
-    if not state.get("tutorial"):
-        return "ignored"
-    if state.get("tutorial_failed"):
-        return "fail"
-    if action == "forfeit":
-        return _tutorial_fail(state, "Вы сдались.")
-    if action == "info":
-        state["show_info"] = not state.get("show_info", False)
-        if tutorial_expected_action(state) != "info":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        _tutorial_advance(state)
-        return "continue"
-    if action == "attack":
-        if tutorial_expected_action(state) != "attack":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        return _tutorial_attack(state, hits=1)
-    if action == "attack_all":
-        if tutorial_expected_action(state) != "attack_all":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        return _tutorial_attack(state, hits=2, consume_all=True)
-    if action == "endturn":
-        if tutorial_expected_action(state) != "endturn":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        return _tutorial_end_turn(state)
-    if action == "potion":
-        if tutorial_expected_action(state) != "potion":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        return _tutorial_use_potion(state)
-    if action == "inventory":
-        if tutorial_expected_action(state) != "scroll":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-            return "continue"
-        state["phase"] = "inventory"
-        return "continue"
-    _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-    return "continue"
-
-
-def tutorial_use_scroll(state: Dict, scroll_id: str | None) -> str:
-    if not state.get("tutorial"):
-        return "ignored"
-    if tutorial_expected_action(state) != "scroll":
-        _append_log(state, f"<i>{tutorial_hint(state)}</i>")
-        return "continue"
-    if scroll_id != "scroll_ice":
-        _append_log(state, "<i>Нужен ледяной свиток.</i>")
-        return "continue"
-    player = state["player"]
-    scrolls = player.get("scrolls", [])
-    index = None
-    for idx, scroll in enumerate(scrolls):
-        if scroll.get("id") == scroll_id:
-            index = idx
-            break
-    if index is None:
-        _append_log(state, "<i>Свиток не найден.</i>")
-        return "continue"
-    scroll = scrolls.pop(index)
-    player["ap"] = max(0, int(player.get("ap", 0)) - 1)
-    config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    damage = int(config.get("scroll_hit", 8))
-    target = _first_alive(state.get("enemies", []))
-    if target:
-        target["hp"] = max(0, target["hp"] - damage)
-        _apply_freeze(target)
-        _append_log(
-            state,
-            f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и скован льдом.",
-        )
-    _tutorial_advance(state)
-    return _tutorial_check_completion(state)
-
-
-def _tutorial_attack(state: Dict, hits: int, consume_all: bool = False) -> str:
-    player = state["player"]
-    config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    damage = int(config.get("player_hit", 6))
-    total_damage = damage * max(1, hits)
-    target = _first_alive(state.get("enemies", []))
-    if not target:
-        return "continue"
-    if consume_all:
-        player["ap"] = 0
-        _append_log(state, f"Вы атакуете на все ОД: {hits} удара по {damage} урона.")
-    else:
-        player["ap"] = max(0, int(player.get("ap", 0)) - 1)
-        _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
-    target["hp"] = max(0, target["hp"] - total_damage)
-    _tutorial_advance(state)
-    return _tutorial_check_completion(state)
-
-
-def _tutorial_end_turn(state: Dict) -> str:
-    player = state["player"]
-    player["ap"] = int(player.get("ap_max", 1))
-    step = int(state.get("tutorial_step", 1))
-    enemy = _first_alive(state.get("enemies", []))
-    if enemy is None:
-        return "continue"
-    config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    if step == 4:
-        damage = int(config.get("enemy_hit", 8))
-        player["hp"] = max(0, player["hp"] - damage)
-        _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
-        if player["hp"] <= 0:
-            return _tutorial_fail(state, "Вы пали в учебной схватке.")
-    elif step == 7:
-        if enemy.get("skip_turns", 0) > 0:
-            enemy["skip_turns"] = max(0, enemy.get("skip_turns", 0) - 1)
-            _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
-        else:
-            _append_log(state, f"{enemy['name']} замирает на месте.")
-    _tutorial_advance(state)
-    return _tutorial_check_completion(state)
-
-
-def _tutorial_use_potion(state: Dict) -> str:
-    player = state["player"]
-    if not player.get("potions"):
-        _append_log(state, "<i>Зелья закончились.</i>")
-        return "continue"
-    potion = player["potions"].pop()
-    heal = int(potion.get("heal", 0))
-    ap_restore = int(potion.get("ap_restore", 0))
-    player["hp"] = min(int(player.get("hp_max", 0)), int(player.get("hp", 0)) + heal)
-    player["ap"] = min(int(player.get("ap_max", 1)), int(player.get("ap", 0)) + ap_restore)
-    _append_log(state, f"Вы используете зелье: +{heal} HP, +{ap_restore} ОД.")
-    _tutorial_advance(state)
-    return "continue"
-
-
-def _tutorial_advance(state: Dict) -> None:
-    step = int(state.get("tutorial_step", 1)) + 1
-    state["tutorial_step"] = step
-    if step == 8:
-        _tutorial_enter_last_breath(state)
-        state["tutorial_step"] = step + 1
-    _tutorial_log_step_prompt(state)
-
-
-def _tutorial_enter_last_breath(state: Dict) -> None:
-    flags = state.setdefault("tutorial_flags", {})
-    if flags.get("last_breath_shown"):
-        return
-    player = state.get("player", {})
-    config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    forced_hp = int(config.get("last_breath_hp", 9))
-    player["hp"] = max(1, min(int(player.get("hp_max", 1)), forced_hp))
-    _append_log(
-        state,
-        "<i>Удар наставника для демонстрации вашей силы снимает Вам 21 HP.</i>\n"
-        "<b>Вы на последнем издыхании.</b> Когда Ваше HP ≤ 1/3 от максимального, точность становится 100%. "
-        "Ваш стиль боя раскрывается именно здесь.",
-    )
-    flags["last_breath_shown"] = True
-
-
-def _tutorial_check_completion(state: Dict) -> str:
-    step = int(state.get("tutorial_step", 1))
-    enemy = _first_alive(state.get("enemies", []))
-    if step >= TUTORIAL_TOTAL_STEPS and (enemy is None or enemy.get("hp", 0) <= 0):
-        state["tutorial_completed"] = True
-        return "complete"
-    return "continue"
-
-
-def _tutorial_fail(state: Dict, reason: str) -> str:
-    state["tutorial_failed"] = True
-    state["tutorial_fail_reason"] = reason
-    state["phase"] = "tutorial_failed"
-    message = "<b>Обучение провалено.</b>"
-    if reason:
-        message = f"{message} {reason}"
-    _append_log(state, message)
-    return "fail"
 
 def _max_group_size_for_floor(floor: int) -> int:
     if floor <= 3:
@@ -1250,32 +863,22 @@ def roll_hit(attacker_accuracy: float, defender_evasion: float, floor: int | Non
     chance = _clamp(attacker_accuracy - effective_evasion, 0.15, 0.95)
     return random.random() < chance
 
-def roll_damage(weapon: Dict, player: Dict, target: Dict) -> int:
+def roll_damage(
+    weapon: Dict,
+    player: Dict,
+    target: Dict,
+    state: Dict,
+    armor_pierce_bonus: float = 0.0,
+) -> int:
     base = random.randint(weapon["min_dmg"], weapon["max_dmg"]) + player["power"]
-    armor = max(0.0, target["armor"] * (1.0 - weapon["armor_pierce"]))
+    pierce = min(1.0, weapon.get("armor_pierce", 0.0) + max(0.0, armor_pierce_bonus))
+    armor = max(0.0, target["armor"] * (1.0 - pierce))
     reduced_portion = base * ENEMY_ARMOR_REDUCED_RATIO
     bypass_portion = base * (1.0 - ENEMY_ARMOR_REDUCED_RATIO)
     dmg = int(max(1, round(max(0.0, reduced_portion - armor) + bypass_portion)))
-    if _has_resolve(player):
+    if _has_resolve(state, player):
         dmg = max(1, int(round(dmg * (1.0 + FULL_HEALTH_DAMAGE_BONUS))))
     return dmg
-
-def _alive_enemies(enemies: List[Dict]) -> List[Dict]:
-    return [enemy for enemy in enemies if enemy["hp"] > 0]
-
-def _tally_kills(state: Dict) -> None:
-    kills = state.setdefault("kills", {})
-    for enemy in state.get("enemies", []):
-        if enemy["hp"] <= 0 and not enemy.get("counted_dead", False):
-            enemy["counted_dead"] = True
-            enemy_id = enemy.get("id", "unknown")
-            kills[enemy_id] = kills.get(enemy_id, 0) + 1
-
-def _first_alive(enemies: List[Dict]) -> Dict:
-    for enemy in enemies:
-        if enemy["hp"] > 0:
-            return enemy
-    return None
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
     if max_floor >= 999:
@@ -1284,7 +887,12 @@ def _floor_range_label(min_floor: int, max_floor: int) -> str:
         return f"{min_floor}"
     return f"{min_floor}-{max_floor}"
 
-def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor: int | None = None) -> str:
+def build_enemy_info_text(
+    enemies: List[Dict],
+    player: Dict | None = None,
+    floor: int | None = None,
+    character_id: str | None = None,
+) -> str:
     alive = [enemy for enemy in enemies if enemy.get("hp", 0) > 0]
     if not alive:
         return "Справка недоступна: врагов нет."
@@ -1325,9 +933,12 @@ def build_enemy_info_text(enemies: List[Dict], player: Dict | None = None, floor
         if player:
             weapon = player.get("weapon", {})
             hit_damage = _enemy_damage_to_player(enemy, player, floor)
-            player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0)
+            state_stub = {"character_id": character_id}
+            is_rune_guard = _is_rune_guard(state_stub)
+            accuracy_bonus = _desperate_charge_accuracy_bonus(state_stub, player)
+            player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0) + accuracy_bonus
             enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
-            if floor is not None and _is_last_breath(player, floor):
+            if not is_rune_guard and _is_last_breath(player):
                 hit_chance = 1.0
             else:
                 hit_chance = _clamp(player_accuracy - enemy_evasion, 0.15, 0.95)
@@ -1372,18 +983,27 @@ def end_turn(state: Dict) -> None:
         return
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
-    player["ap"] = _effective_ap_max(state)
+    _apply_rune_guard_shield(state)
     enemy_phase(state)
     _tally_kills(state)
+    _clear_rune_guard_shield(state)
+    if state.get("phase") != "dead":
+        _refresh_turn_ap(state)
     check_battle_end(state)
 
 def player_attack(state: Dict, log_kills: bool = True) -> None:
     player = state["player"]
-    if player["ap"] <= 0:
+    desperate_active = _is_desperate_charge(state, player)
+    free_attack = desperate_active and not state.get("desperate_charge_used", False)
+    if player["ap"] <= 0 and not free_attack:
         _append_log(state, "Нет ОД для атаки.")
         return
 
-    player["ap"] -= 1
+    if free_attack:
+        state["desperate_charge_used"] = True
+        _append_log(state, "Отчаянный рывок: атака без затрат ОД.")
+    else:
+        player["ap"] -= 1
     weapon = player["weapon"]
     target = _first_alive(state["enemies"])
     if target is None:
@@ -1391,22 +1011,38 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
 
     alive_before = len(_alive_enemies(state["enemies"]))
 
-    last_breath = _is_last_breath(player, state["floor"])
     shadow_evaded = False
+    last_breath = _is_last_breath(player)
+    is_rune_guard = _is_rune_guard(state)
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
         shadow_evaded = True
         hit = False
     else:
-        hit = True if last_breath else roll_hit(
-            player["accuracy"] + weapon["accuracy_bonus"],
-            target["evasion"],
-            state.get("floor"),
-        )
+        if is_rune_guard:
+            accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
+            hit = roll_hit(
+                player["accuracy"] + weapon["accuracy_bonus"] + accuracy_bonus,
+                target["evasion"],
+                state.get("floor"),
+            )
+        else:
+            hit = True if last_breath else roll_hit(
+                player["accuracy"] + weapon["accuracy_bonus"],
+                target["evasion"],
+                state.get("floor"),
+            )
     if hit:
-        damage = roll_damage(weapon, player, target)
+        retribution_ready = state.get("rune_guard_retribution_ready", False)
+        armor_pierce_bonus = (
+            RUNE_GUARD_RETRIBUTION_PIERCE if retribution_ready else 0.0
+        )
+        damage = roll_damage(weapon, player, target, state, armor_pierce_bonus=armor_pierce_bonus)
         target["hp"] -= damage
         _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
+        if retribution_ready and armor_pierce_bonus > 0:
+            state["rune_guard_retribution_ready"] = False
+            _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
         _apply_stone_skin(state, target)
 
         if weapon["splash_ratio"] > 0:
@@ -1481,7 +1117,7 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
 
     scroll = scrolls.pop(scroll_index)
     player["ap"] -= 1
-    damage = _magic_scroll_damage(player, ap_max=_effective_ap_max(state))
+    damage = _magic_scroll_damage(state, player, ap_max=_effective_ap_max(state))
     element = scroll.get("element")
 
     if element == "lightning":
@@ -1545,6 +1181,7 @@ def enemy_phase(state: Dict) -> None:
             player["hp"] -= damage
             total_damage += damage
             _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
+            _maybe_trigger_rune_guard_retribution(state, damage)
         else:
             _append_log(state, f"{enemy['name']} промахивается.")
         if player["hp"] <= 0:
@@ -1866,17 +1503,21 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         _append_log(state, "Вы не смогли выбрать артефакт.")
 
     player["hp"] = player["hp_max"]
-    player["ap"] = player["ap_max"]
+    _refresh_turn_ap(state)
     state["boss_artifacts"] = []
     boss_kind = state.get("boss_kind")
     if boss_kind == "daughter":
-        state["enemies"] = [build_daughter_boss(player, state.get("floor", BOSS_FLOOR))]
+        state["enemies"] = [
+            build_daughter_boss(player, state.get("floor", BOSS_FLOOR), state.get("character_id"))
+        ]
         state["phase"] = "battle"
         _append_log(state, "Дочь некроманта выходит из тени. Битва начинается.")
     elif boss_kind == "fallen":
         boss_name = state.get("boss_name") or LATE_BOSS_NAME_FALLBACK
         state["boss_name"] = boss_name
-        state["enemies"] = [build_late_boss(player, state.get("floor", BOSS_FLOOR), boss_name)]
+        state["enemies"] = [
+            build_late_boss(player, state.get("floor", BOSS_FLOOR), boss_name, state.get("character_id"))
+        ]
         state["phase"] = "battle"
         _append_log(state, f"{boss_name} поднимает оружие. Битва начинается.")
     else:
@@ -1910,7 +1551,7 @@ def advance_floor(state: Dict) -> None:
     _enforce_ap_max_cap(player, state["floor"])
     if is_any_boss_floor(state["floor"]):
         player["hp"] = player["hp_max"]
-        player["ap"] = player["ap_max"]
+        _refresh_turn_ap(state)
         state["phase"] = "boss_prep"
         state["boss_artifacts"] = generate_boss_artifacts()
         if is_boss_floor(state["floor"]):
@@ -1922,7 +1563,7 @@ def advance_floor(state: Dict) -> None:
             state["boss_kind"] = "daughter"
             state["boss_name"] = DAUGHTER_BOSS_NAME
             state["boss_intro_lines"] = DAUGHTER_INTRO_LINES
-            state["enemies"] = [build_daughter_boss(player, state["floor"])]
+            state["enemies"] = [build_daughter_boss(player, state["floor"], state.get("character_id"))]
         else:
             state["boss_kind"] = "fallen"
             state["boss_name"] = None
@@ -1931,7 +1572,7 @@ def advance_floor(state: Dict) -> None:
         return
     if _roll_cursed_floor(state["floor"]):
         state["cursed_ap_ratio"] = CURSED_AP_RATIO
-    player["ap"] = _effective_ap_max(state)
+    _refresh_turn_ap(state)
     state["boss_kind"] = None
     state["boss_name"] = None
     state["boss_intro_lines"] = None
@@ -1947,10 +1588,23 @@ def render_state(state: Dict) -> str:
     enemies = _alive_enemies(state["enemies"])
     effective_ap_max = _effective_ap_max(state)
     tutorial_active = bool(state.get("tutorial"))
+    character = get_character(state.get("character_id")) if state.get("character_id") else None
 
-    last_breath_active = _is_last_breath(player, state["floor"])
-    accuracy_value = 1.0 if last_breath_active else player["accuracy"]
-    accuracy_display = "∞" if last_breath_active else _percent(accuracy_value, show_percent=False)
+    is_rune_guard = _is_rune_guard(state)
+    last_breath_active = _is_last_breath(player)
+    desperate_charge_active = is_rune_guard and last_breath_active
+    base_accuracy = player["accuracy"]
+    accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
+    effective_accuracy = _clamp(base_accuracy + accuracy_bonus, 0.0, 0.95)
+    if desperate_charge_active and accuracy_bonus > 0:
+        accuracy_display = (
+            f"{_percent(base_accuracy, show_percent=False)} "
+            f"(эфф. {_percent(effective_accuracy, show_percent=False)})"
+        )
+    elif not is_rune_guard and last_breath_active:
+        accuracy_display = "∞"
+    else:
+        accuracy_display = _percent(base_accuracy, show_percent=False)
 
     base_evasion = player.get("evasion", 0.0)
     effective_evasion = _effective_evasion(base_evasion, state.get("floor"))
@@ -1961,16 +1615,22 @@ def render_state(state: Dict) -> str:
 
     lines = [
         f"<b>Этаж:</b> {state['floor']}",
-        f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
-        f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
-        (
-            f"<b>Точность:</b> {accuracy_display} | "
-            f"<b>Уклонение:</b> {evasion_text} | "
-            f"<b>Броня:</b> {int(round(player['armor']))} | "
-            f"<b>Удача:</b> {_percent(player.get('luck', 0.0))}"
-        ),
-        f"<b>Сила:</b> +{player.get('power', 0)} урона",
     ]
+    if character:
+        lines.append(f"<b>Герой:</b> {character['name']}")
+    lines.extend(
+        [
+            f"<b>HP:</b> {player['hp']}/{player['hp_max']} | <b>ОД:</b> {min(player['ap'], effective_ap_max)}/{effective_ap_max}",
+            f"<b>Лимит ОД:</b> {_ap_max_cap_for_floor(state['floor'])}",
+            (
+                f"<b>Точность:</b> {accuracy_display} | "
+                f"<b>Уклонение:</b> {evasion_text} | "
+                f"<b>Броня:</b> {int(round(player['armor']))} | "
+                f"<b>Удача:</b> {_percent(player.get('luck', 0.0))}"
+            ),
+            f"<b>Сила:</b> +{player.get('power', 0)} урона",
+        ]
+    )
     if tutorial_active:
         step = int(state.get("tutorial_step", 1))
         scene = state.get("tutorial_scene", TUTORIAL_SCENE_NAME)
@@ -1984,10 +1644,18 @@ def render_state(state: Dict) -> str:
         header.append("")
         lines = header + lines
     status_notes = []
-    if _has_resolve(player):
+    if _has_resolve(state, player):
         status_notes.append("Решимость — урон +20%")
-    if last_breath_active:
+    if is_rune_guard and desperate_charge_active:
+        status_notes.append("Отчаянный рывок — 1-я атака 0 ОД, точность +25%")
+    if not is_rune_guard and last_breath_active:
         status_notes.append("На последнем издыхании — точность 100%")
+    if state.get("rune_guard_shield_active"):
+        status_notes.append("Рунический заслон — броня +2")
+    if state.get("rune_guard_retribution_ready"):
+        status_notes.append("Расплата камня — бронепробой +30%")
+    if state.get("ap_bonus"):
+        status_notes.append("Ровное дыхание — ОД +1")
     if state.get("cursed_ap_ratio"):
         status_notes.append("Проклятие — ОД 3/4")
     if effective_evasion != base_evasion:
@@ -2009,7 +1677,15 @@ def render_state(state: Dict) -> str:
             lines.append("<i>Враги отсутствуют.</i>")
         info_lines = []
         if state.get("show_info"):
-            info_lines = ["", *build_enemy_info_text(state.get("enemies", []), player, state.get("floor", 1)).splitlines()]
+            info_lines = [
+                "",
+                *build_enemy_info_text(
+                    state.get("enemies", []),
+                    player,
+                    state.get("floor", 1),
+                    character_id=state.get("character_id"),
+                ).splitlines(),
+            ]
         if state["phase"] == "forfeit_confirm":
             lines.append("")
             lines.append("<i>Подтвердите сдачу. Забег будет завершен.</i>")
@@ -2080,7 +1756,7 @@ def render_state(state: Dict) -> str:
         lines.append("<i>Выберите зелье для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
-        magic_damage = _magic_scroll_damage(player, ap_max=_effective_ap_max(state))
+        magic_damage = _magic_scroll_damage(state, player, ap_max=_effective_ap_max(state))
         if tutorial_active:
             config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
             magic_damage = int(config.get("scroll_hit", magic_damage))

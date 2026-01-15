@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from typing import Dict
+
+DESPERATE_CHARGE_ACCURACY_BONUS = 0.25
+DESPERATE_CHARGE_THRESHOLD_RATIO = 1 / 3
+
+DEFAULT_CHARACTER_ID = "wanderer"
+RUNE_GUARD_ID = "rune_guard"
+RUNE_GUARD_HP_BONUS = 6
+RUNE_GUARD_ARMOR_BONUS = 1.0
+RUNE_GUARD_EVASION_PENALTY = 0.05
+RUNE_GUARD_SHIELD_BONUS = 2.0
+RUNE_GUARD_RETRIBUTION_PIERCE = 0.3
+RUNE_GUARD_RETRIBUTION_THRESHOLD = 0.25
+RUNE_GUARD_AP_BONUS = 1
+
+CHARACTERS = {
+    DEFAULT_CHARACTER_ID: {
+        "id": DEFAULT_CHARACTER_ID,
+        "name": "Странник руин",
+        "description": [
+            "Сбалансированный герой без особых эффектов.",
+            "Последнее издыхание: при HP ≤ 1/3 точность 100%.",
+            "Решимость: на полном здоровье урон +20%.",
+        ],
+    },
+    RUNE_GUARD_ID: {
+        "id": RUNE_GUARD_ID,
+        "name": "Страж рун",
+        "description": [
+            "HP +6, броня +1, уклонение -5%.",
+            "Рунический заслон: при окончании хода с 0 ОД броня +2 до конца хода врагов.",
+            "Расплата камня: получив удар >25% HP, следующий удар игнорирует 30% брони.",
+            "Ровное дыхание: на полном HP в начале хода +1 ОД (не выше капа).",
+            "Отчаянный рывок: при HP ≤ 1/3 1-я атака в ход стоит 0 ОД и точность +25%.",
+        ],
+    },
+}
+
+
+def get_character(character_id: str | None) -> Dict:
+    if character_id in CHARACTERS:
+        return CHARACTERS[character_id]
+    return CHARACTERS[DEFAULT_CHARACTER_ID]
+
+
+def resolve_character_id(character_id: str | None) -> str:
+    chosen_id = character_id or DEFAULT_CHARACTER_ID
+    if chosen_id not in CHARACTERS:
+        return DEFAULT_CHARACTER_ID
+    return chosen_id
+
+
+def apply_character_starting_stats(player: Dict, character_id: str) -> None:
+    if character_id != RUNE_GUARD_ID:
+        return
+    player["hp_max"] += RUNE_GUARD_HP_BONUS
+    player["hp"] += RUNE_GUARD_HP_BONUS
+    player["armor"] += RUNE_GUARD_ARMOR_BONUS
+    player["evasion"] = max(0.0, player["evasion"] - RUNE_GUARD_EVASION_PENALTY)
+
+
+def _is_rune_guard(state: Dict) -> bool:
+    return state.get("character_id") == RUNE_GUARD_ID
+
+
+def _is_default_character(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == DEFAULT_CHARACTER_ID
+
+
+def _is_full_hp(player: Dict) -> bool:
+    hp_max = int(player.get("hp_max", 0))
+    if hp_max <= 0:
+        return False
+    return player.get("hp", 0) >= hp_max
+
+
+def _has_resolve(state: Dict, player: Dict) -> bool:
+    return _is_default_character(state) and _is_full_hp(player)
+
+
+def _has_steady_breath(state: Dict, player: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == RUNE_GUARD_ID and _is_full_hp(player)
+
+
+def _is_last_breath(player: Dict) -> bool:
+    max_hp = max(1, int(player.get("hp_max", 1)))
+    return player.get("hp", 0) <= max_hp * DESPERATE_CHARGE_THRESHOLD_RATIO
+
+
+def _is_desperate_charge(state: Dict, player: Dict | None = None) -> bool:
+    if not _is_rune_guard(state):
+        return False
+    player = player or state.get("player", {})
+    return _is_last_breath(player)
+
+
+def _desperate_charge_accuracy_bonus(state: Dict, player: Dict) -> float:
+    if _is_desperate_charge(state, player):
+        return DESPERATE_CHARGE_ACCURACY_BONUS
+    return 0.0
+
+
+def is_desperate_charge_available(state: Dict) -> bool:
+    player = state.get("player")
+    if not player:
+        return False
+    return _is_desperate_charge(state, player) and not state.get("desperate_charge_used")

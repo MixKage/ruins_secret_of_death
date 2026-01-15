@@ -176,6 +176,17 @@ def story_nav_kb(chapter: int, max_chapter: int) -> InlineKeyboardMarkup:
     builder.adjust(3)
     return builder.as_markup()
 
+def character_select_kb(characters: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for character in characters:
+        builder.button(
+            text=character.get("name", "Герой"),
+            callback_data=f"hero:select:{character.get('id', '')}",
+        )
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def rules_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="О наградах", callback_data="rules:badges")
