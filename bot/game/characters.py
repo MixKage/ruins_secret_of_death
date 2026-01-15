@@ -9,6 +9,7 @@ DEFAULT_CHARACTER_ID = "wanderer"
 RUNE_GUARD_ID = "rune_guard"
 BERSERK_ID = "berserk"
 ASSASSIN_ID = "assassin"
+HUNTER_ID = "hunter"
 RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
@@ -32,6 +33,11 @@ ASSASSIN_FULL_HP_BONUS = 0.40
 ASSASSIN_BACKSTAB_BONUS = 0.20
 ASSASSIN_ECHO_RATIO = 0.50
 ASSASSIN_POTION_HP_BONUS = 2
+HUNTER_HP_BONUS = 2
+HUNTER_EVASION_BONUS = 0.05
+HUNTER_ACCURACY_BONUS = 0.10
+HUNTER_MARK_DAMAGE_BONUS = 0.25
+HUNTER_FIRST_SHOT_BONUS = 0.10
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
@@ -79,6 +85,19 @@ CHARACTERS = {
             "Ядовитые настои: зелья дают +2 HP.",
         ],
     },
+    HUNTER_ID: {
+        "id": HUNTER_ID,
+        "name": "Охотник",
+        "description": [
+            "HP +2, броня без изменений, уклонение +5%, точность +10%.",
+            "Охотничья метка: первая атака по цели накладывает метку.",
+            "Добыча: по цели с меткой урон +25%.",
+            "Перенос метки: при убийстве цели метка переходит на случайного врага из первых ceil(N/2).",
+            "Гон по следу: первое убийство за ход восстанавливает 1 ОД.",
+            "Выверенный выстрел: первая атака в ход получает +10% точности.",
+            "На последнем издыхании: при HP ≤ 1/3 точность 100%.",
+        ],
+    },
 }
 
 
@@ -117,6 +136,12 @@ def apply_character_starting_stats(player: Dict, character_id: str) -> None:
         player["evasion"] = float(player.get("evasion", 0.0)) + ASSASSIN_EVASION_BONUS
         player["accuracy"] = float(player.get("accuracy", 0.0)) + ASSASSIN_ACCURACY_BONUS
         return
+    if character_id == HUNTER_ID:
+        player["hp_max"] = max(1, int(player.get("hp_max", 1)) + HUNTER_HP_BONUS)
+        player["hp"] = min(player["hp_max"], int(player.get("hp", player["hp_max"])) + HUNTER_HP_BONUS)
+        player["evasion"] = float(player.get("evasion", 0.0)) + HUNTER_EVASION_BONUS
+        player["accuracy"] = float(player.get("accuracy", 0.0)) + HUNTER_ACCURACY_BONUS
+        return
 
 
 def _is_rune_guard(state: Dict) -> bool:
@@ -129,6 +154,10 @@ def _is_berserk(state: Dict) -> bool:
 
 def _is_assassin(state: Dict) -> bool:
     return resolve_character_id(state.get("character_id")) == ASSASSIN_ID
+
+
+def _is_hunter(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == HUNTER_ID
 
 
 def _is_default_character(state: Dict) -> bool:
@@ -156,7 +185,7 @@ def _is_last_breath(player: Dict) -> bool:
 
 
 def _has_last_breath(state: Dict, player: Dict) -> bool:
-    return _is_default_character(state) and _is_last_breath(player)
+    return (_is_default_character(state) or _is_hunter(state)) and _is_last_breath(player)
 
 
 def _berserk_rage_state(state: Dict, player: Dict) -> tuple[str, float] | None:
@@ -211,6 +240,18 @@ def _assassin_potion_bonus(state: Dict) -> int:
     if _is_assassin(state):
         return ASSASSIN_POTION_HP_BONUS
     return 0
+
+
+def _hunter_mark_bonus(state: Dict, target: Dict) -> float:
+    if _is_hunter(state) and target.get("hunter_mark"):
+        return HUNTER_MARK_DAMAGE_BONUS
+    return 0.0
+
+
+def _hunter_first_shot_bonus(state: Dict) -> float:
+    if _is_hunter(state):
+        return HUNTER_FIRST_SHOT_BONUS
+    return 0.0
 
 
 def _is_desperate_charge(state: Dict, player: Dict | None = None) -> bool:

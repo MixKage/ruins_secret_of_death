@@ -23,6 +23,9 @@ from .characters import (
     _is_berserk,
     _is_desperate_charge,
     _is_rune_guard,
+    _is_hunter,
+    _hunter_first_shot_bonus,
+    _hunter_mark_bonus,
     apply_character_starting_stats,
     get_character,
     is_desperate_charge_available,
@@ -173,6 +176,8 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["desperate_charge_used"] = False
     state["berserk_kill_used"] = False
     state["assassin_echo_used"] = False
+    state["hunter_first_shot_used"] = False
+    state["hunter_kill_used"] = False
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
@@ -210,6 +215,27 @@ def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
     if damage > hp_max * RUNE_GUARD_RETRIBUTION_THRESHOLD:
         state["rune_guard_retribution_ready"] = True
         _append_log(state, "Расплата камня: следующий удар игнорирует 30% брони.")
+
+
+def _hunter_transfer_mark(state: Dict) -> None:
+    if not _is_hunter(state):
+        return
+    marked_dead = next(
+        (enemy for enemy in state.get("enemies", []) if enemy.get("hunter_mark") and enemy.get("hp", 0) <= 0),
+        None,
+    )
+    if not marked_dead:
+        return
+    for enemy in state.get("enemies", []):
+        enemy.pop("hunter_mark", None)
+    alive = _alive_enemies(state.get("enemies", []))
+    if not alive:
+        return
+    limit = (len(alive) + 1) // 2
+    candidates = alive[:limit]
+    new_target = random.choice(candidates)
+    new_target["hunter_mark"] = True
+    _append_log(state, f"Перенос метки: цель {new_target['name']} отмечена.")
 
 def _roll_cursed_floor(floor: int) -> bool:
     if floor < CURSED_FLOOR_MIN_FLOOR:
@@ -731,6 +757,8 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "desperate_charge_used": False,
         "berserk_kill_used": False,
         "assassin_echo_used": False,
+        "hunter_first_shot_used": False,
+        "hunter_kill_used": False,
         "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
@@ -907,6 +935,9 @@ def roll_damage(
     backstab_bonus = _assassin_backstab_bonus(state, target)
     if backstab_bonus:
         dmg = max(1, int(round(dmg * (1.0 + backstab_bonus))))
+    hunter_bonus = _hunter_mark_bonus(state, target)
+    if hunter_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + hunter_bonus))))
     return dmg
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
@@ -1048,8 +1079,14 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     last_breath = _has_last_breath(state, player)
     is_rune_guard = _is_rune_guard(state)
     is_assassin = _is_assassin(state)
+    is_hunter = _is_hunter(state)
     assassin_shadow = _assassin_shadow_active(state, player)
     is_berserk = _is_berserk(state)
+    hunter_first_shot = is_hunter and not state.get("hunter_first_shot_used")
+    if hunter_first_shot:
+        state["hunter_first_shot_used"] = True
+    hunter_accuracy_bonus = _hunter_first_shot_bonus(state) if hunter_first_shot else 0.0
+    has_hunter_mark = any(enemy.get("hunter_mark") for enemy in state.get("enemies", []))
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
         shadow_evaded = True
@@ -1060,13 +1097,13 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         elif is_rune_guard:
             accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
             hit = roll_hit(
-                player["accuracy"] + weapon["accuracy_bonus"] + accuracy_bonus,
+                player["accuracy"] + weapon["accuracy_bonus"] + accuracy_bonus + hunter_accuracy_bonus,
                 target["evasion"],
                 state.get("floor"),
             )
         else:
             hit = True if last_breath else roll_hit(
-                player["accuracy"] + weapon["accuracy_bonus"],
+                player["accuracy"] + weapon["accuracy_bonus"] + hunter_accuracy_bonus,
                 target["evasion"],
                 state.get("floor"),
             )
@@ -1080,6 +1117,11 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         damage = roll_damage(weapon, player, target, state, armor_pierce_bonus=armor_pierce_bonus)
         target["hp"] -= damage
         _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
+        if is_hunter and not has_hunter_mark:
+            for enemy in state.get("enemies", []):
+                enemy.pop("hunter_mark", None)
+            target["hunter_mark"] = True
+            _append_log(state, f"Охотничья метка: цель {target['name']} отмечена.")
         if retribution_ready and armor_pierce_bonus > 0:
             state["rune_guard_retribution_ready"] = False
             _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
@@ -1100,6 +1142,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             target["bleed_turns"] = max(target["bleed_turns"], 2)
             target["bleed_damage"] = max(target["bleed_damage"], weapon["bleed_damage"])
             _append_log(state, f"{target['name']} истекает кровью.")
+        _hunter_transfer_mark(state)
     else:
         if shadow_evaded:
             _append_log(state, f"{target['name']} растворяется в тени и избегает удара.")
@@ -1130,6 +1173,12 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         player["ap"] = min(_effective_ap_max(state), ap_before + 1)
         if player["ap"] > ap_before:
             _append_log(state, "Кровавая добыча: +1 ОД за первое убийство в ход.")
+    if killed > 0 and is_hunter and not state.get("hunter_kill_used"):
+        state["hunter_kill_used"] = True
+        ap_before = player.get("ap", 0)
+        player["ap"] = min(_effective_ap_max(state), ap_before + 1)
+        if player["ap"] > ap_before:
+            _append_log(state, "Гон по следу: +1 ОД за первое убийство в ход.")
 
     check_battle_end(state)
 
@@ -1192,19 +1241,33 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
     if element == "lightning":
         targets = _alive_enemies(state["enemies"])
         for enemy in targets:
-            enemy["hp"] -= damage
+            enemy_damage = damage
+            mark_bonus = _hunter_mark_bonus(state, enemy)
+            if mark_bonus:
+                enemy_damage = max(1, int(round(enemy_damage * (1.0 + mark_bonus))))
+            enemy["hp"] -= enemy_damage
             _apply_stone_skin(state, enemy)
         _append_log(state, f"Вы читаете {scroll['name']}: молнии бьют по всем врагам на {damage} урона.")
     elif element == "ice":
-        target["hp"] -= damage
+        target_damage = damage
+        mark_bonus = _hunter_mark_bonus(state, target)
+        if mark_bonus:
+            target_damage = max(1, int(round(target_damage * (1.0 + mark_bonus))))
+        target["hp"] -= target_damage
         _apply_stone_skin(state, target)
         _apply_freeze(target)
-        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и скован льдом.")
+        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {target_damage} урона и скован льдом.")
     else:
-        target["hp"] -= damage
+        target_damage = damage
+        mark_bonus = _hunter_mark_bonus(state, target)
+        if mark_bonus:
+            target_damage = max(1, int(round(target_damage * (1.0 + mark_bonus))))
+        target["hp"] -= target_damage
         _apply_stone_skin(state, target)
-        _apply_burn(target, damage)
-        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и горит.")
+        _apply_burn(target, target_damage)
+        _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {target_damage} урона и горит.")
+
+    _hunter_transfer_mark(state)
 
     if (
         _is_assassin(state)
@@ -1240,6 +1303,7 @@ def enemy_phase(state: Dict) -> None:
             _append_log(state, f"{enemy['name']} горит и теряет {enemy.get('burn_damage', 0)} HP.")
 
     _tally_kills(state)
+    _hunter_transfer_mark(state)
     enemies = _alive_enemies(state["enemies"])
     if not enemies:
         return
@@ -1748,6 +1812,12 @@ def render_state(state: Dict) -> str:
         status_notes.append("Эхо убийства — готово")
     if _is_assassin(state):
         status_notes.append("Ядовитые настои — зелья +2 HP")
+    if _is_hunter(state) and not state.get("hunter_first_shot_used"):
+        status_notes.append("Выверенный выстрел — +10% точности")
+    if _is_hunter(state) and not state.get("hunter_kill_used"):
+        status_notes.append("Гон по следу — +1 ОД за первое убийство")
+    if _is_hunter(state) and any(enemy.get("hunter_mark") for enemy in state.get("enemies", [])):
+        status_notes.append("Охотничья метка — активна")
     rage_state = _berserk_rage_state(state, player)
     if rage_state:
         rage_name, rage_bonus = rage_state
@@ -1780,7 +1850,10 @@ def render_state(state: Dict) -> str:
         if enemies:
             lines.append(f"<b>Враги ({len(enemies)}):</b>")
             for enemy in enemies:
-                lines.append(f"- <b>{enemy['name']}</b>: {enemy['hp']}/{enemy['max_hp']} HP")
+                name = enemy["name"]
+                if enemy.get("hunter_mark"):
+                    name = f"{name} (метка)"
+                lines.append(f"- <b>{name}</b>: {enemy['hp']}/{enemy['max_hp']} HP")
         else:
             lines.append("<i>Враги отсутствуют.</i>")
         info_lines = []
