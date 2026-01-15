@@ -79,7 +79,7 @@ def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineK
     builder.adjust(1)
     return builder.as_markup()
 
-def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
+def inventory_kb(scrolls: list, duel_zone_charges: int | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     grouped = {}
     order = []
@@ -100,6 +100,11 @@ def inventory_kb(scrolls: list) -> InlineKeyboardMarkup:
         if entry["count"] > 1:
             label = f"{label} x{entry['count']}"
         builder.button(text=label, callback_data=f"inventory:use_id:{scroll_id}")
+    if duel_zone_charges is not None:
+        label = "Дуэльная зона"
+        if duel_zone_charges is not None:
+            label = f"{label} x{duel_zone_charges}"
+        builder.button(text=label, callback_data="inventory:duel_zone")
     builder.button(text="Назад", callback_data="inventory:back")
     builder.adjust(1)
     return builder.as_markup()

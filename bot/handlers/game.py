@@ -26,6 +26,7 @@ from bot.game.logic import (
     tutorial_apply_action,
     tutorial_force_endturn,
     tutorial_use_scroll,
+    use_duel_zone,
     TREASURE_REWARD_XP,
     LATE_BOSS_NAME_FALLBACK,
 )
@@ -283,7 +284,12 @@ def _markup_for_state(state: dict, is_admin: bool = False):
     if state["phase"] == "treasure":
         return treasure_kb()
     if state["phase"] == "inventory":
-        return inventory_kb(state["player"].get("scrolls", []))
+        duel_charges = (
+            state.get("duel_zone_charges")
+            if state.get("character_id") == "duelist"
+            else None
+        )
+        return inventory_kb(state["player"].get("scrolls", []), duel_zone_charges=duel_charges)
     if state["phase"] == "potion_select":
         small_count = count_potions(state["player"], "potion_small")
         medium_count = count_potions(state["player"], "potion_medium")
@@ -699,6 +705,17 @@ async def inventory_action(callback: CallbackQuery) -> None:
             await _send_state(callback, state, run_id)
             return
         player_use_scroll(state, index)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+    if action == "duel_zone":
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
+        if state.get("tutorial"):
+            await callback.answer("Недоступно в обучении.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        use_duel_zone(state)
         await db.update_run(run_id, state)
         await callback.answer()
         await _send_state(callback, state, run_id)

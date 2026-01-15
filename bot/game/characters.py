@@ -11,6 +11,7 @@ BERSERK_ID = "berserk"
 ASSASSIN_ID = "assassin"
 HUNTER_ID = "hunter"
 EXECUTIONER_ID = "executioner"
+DUELIST_ID = "duelist"
 RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
@@ -43,11 +44,21 @@ EXECUTIONER_HP_BONUS = 4
 EXECUTIONER_ARMOR_BONUS = 1.0
 EXECUTIONER_EVASION_PENALTY = 0.05
 EXECUTIONER_BLEED_DAMAGE_BONUS = 0.25
+DUELIST_ARMOR_BONUS = 1.0
+DUELIST_EVASION_BONUS = 0.10
+DUELIST_ACCURACY_BONUS = 0.05
+DUELIST_DUEL_DAMAGE_BONUS = 0.25
+DUELIST_DUEL_ACCURACY_BONUS = 0.15
+DUELIST_BLADE_PIERCE_BONUS = 0.25
+DUELIST_ZONE_CHARGES = 2
+DUELIST_ZONE_TURNS = 2
+DUELIST_PARRY_REDUCTION = 0.60
+DUELIST_PARRY_COUNTER_RATIO = 0.50
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
         "id": DEFAULT_CHARACTER_ID,
-        "name": "Странник руин",
+        "name": "Рыцарь",
         "description": [
             "Сбалансированный герой без особых эффектов.",
             "Последнее издыхание: при HP ≤ 1/3 точность 100%.",
@@ -116,6 +127,18 @@ CHARACTERS = {
             "Цена смерти: после 3 ходов на последнем издыхании получает -10 HP.",
         ],
     },
+    DUELIST_ID: {
+        "id": DUELIST_ID,
+        "name": "Дуэлянт",
+        "description": [
+            "HP без изменений, броня +1, уклонение +10%, точность +5%.",
+            "Дуэль: при 1 живом враге урон +25% и точность +15%.",
+            "Парирование: первый успешный удар врага в фазу снижает урон на 60% и контратакует на 50% предотвращенного урона.",
+            "Клинок чести: первая атака в ход игнорирует 25% брони цели.",
+            "Дуэльная зона: 2 заряда на этаж, при использовании на враге активирует эффект дуэли на 2 хода или до его смерти.",
+            "На последнем издыхании: при HP ≤ 1/3 точность 100%.",
+        ],
+    },
 }
 
 
@@ -166,6 +189,11 @@ def apply_character_starting_stats(player: Dict, character_id: str) -> None:
         player["armor"] = float(player.get("armor", 0.0)) + EXECUTIONER_ARMOR_BONUS
         player["evasion"] = float(player.get("evasion", 0.0)) - EXECUTIONER_EVASION_PENALTY
         return
+    if character_id == DUELIST_ID:
+        player["armor"] = float(player.get("armor", 0.0)) + DUELIST_ARMOR_BONUS
+        player["evasion"] = float(player.get("evasion", 0.0)) + DUELIST_EVASION_BONUS
+        player["accuracy"] = float(player.get("accuracy", 0.0)) + DUELIST_ACCURACY_BONUS
+        return
 
 
 def _is_rune_guard(state: Dict) -> bool:
@@ -186,6 +214,10 @@ def _is_hunter(state: Dict) -> bool:
 
 def _is_executioner(state: Dict) -> bool:
     return resolve_character_id(state.get("character_id")) == EXECUTIONER_ID
+
+
+def _is_duelist(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == DUELIST_ID
 
 
 def _is_default_character(state: Dict) -> bool:
@@ -213,7 +245,12 @@ def _is_last_breath(player: Dict) -> bool:
 
 
 def _has_last_breath(state: Dict, player: Dict) -> bool:
-    return (_is_default_character(state) or _is_hunter(state) or _is_executioner(state)) and _is_last_breath(player)
+    return (
+        _is_default_character(state)
+        or _is_hunter(state)
+        or _is_executioner(state)
+        or _is_duelist(state)
+    ) and _is_last_breath(player)
 
 
 def _berserk_rage_state(state: Dict, player: Dict) -> tuple[str, float] | None:
@@ -285,6 +322,24 @@ def _hunter_first_shot_bonus(state: Dict) -> float:
 def _executioner_damage_bonus(state: Dict, target: Dict) -> float:
     if _is_executioner(state) and target.get("bleed_turns", 0) > 0:
         return EXECUTIONER_BLEED_DAMAGE_BONUS
+    return 0.0
+
+
+def _duelist_duel_damage_bonus(state: Dict, duel_active: bool) -> float:
+    if _is_duelist(state) and duel_active:
+        return DUELIST_DUEL_DAMAGE_BONUS
+    return 0.0
+
+
+def _duelist_duel_accuracy_bonus(state: Dict, duel_active: bool) -> float:
+    if _is_duelist(state) and duel_active:
+        return DUELIST_DUEL_ACCURACY_BONUS
+    return 0.0
+
+
+def _duelist_blade_pierce_bonus(state: Dict, used: bool) -> float:
+    if _is_duelist(state) and not used:
+        return DUELIST_BLADE_PIERCE_BONUS
     return 0.0
 
 

@@ -4,6 +4,10 @@ from typing import Dict, List, Tuple
 
 from .characters import (
     CHARACTERS,
+    DUELIST_PARRY_COUNTER_RATIO,
+    DUELIST_PARRY_REDUCTION,
+    DUELIST_ZONE_CHARGES,
+    DUELIST_ZONE_TURNS,
     RUNE_GUARD_AP_BONUS,
     RUNE_GUARD_RETRIBUTION_PIERCE,
     RUNE_GUARD_RETRIBUTION_THRESHOLD,
@@ -16,6 +20,9 @@ from .characters import (
     _berserk_damage_bonus,
     _berserk_rage_state,
     _desperate_charge_accuracy_bonus,
+    _duelist_blade_pierce_bonus,
+    _duelist_duel_accuracy_bonus,
+    _duelist_duel_damage_bonus,
     _executioner_damage_bonus,
     _has_last_breath,
     _has_resolve,
@@ -23,9 +30,10 @@ from .characters import (
     _is_assassin,
     _is_berserk,
     _is_desperate_charge,
+    _is_duelist,
     _is_executioner,
-    _is_rune_guard,
     _is_hunter,
+    _is_rune_guard,
     _hunter_first_shot_bonus,
     _hunter_mark_bonus,
     apply_character_starting_stats,
@@ -183,6 +191,8 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["executioner_bleed_used"] = False
     state["executioner_onslaught_used"] = False
     state["executioner_heal_count"] = 0
+    state["duelist_blade_used"] = False
+    state["duelist_parry_used"] = False
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
@@ -242,6 +252,42 @@ def _apply_executioner_last_breath_penalty(state: Dict) -> None:
                 _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
     else:
         state["executioner_last_breath_turns"] = 0
+
+
+def _duel_target(state: Dict) -> Dict | None:
+    idx = state.get("duel_target_idx")
+    if idx is None:
+        return None
+    enemies = state.get("enemies", [])
+    if not isinstance(idx, int) or idx < 0 or idx >= len(enemies):
+        return None
+    target = enemies[idx]
+    if target.get("hp", 0) <= 0:
+        return None
+    return target
+
+
+def _duel_zone_active(state: Dict) -> bool:
+    return int(state.get("duel_turns_left", 0) or 0) > 0 and _duel_target(state) is not None
+
+
+def _duelist_duel_active(state: Dict) -> bool:
+    if not _is_duelist(state):
+        return False
+    if _duel_zone_active(state):
+        return True
+    alive = _alive_enemies(state.get("enemies", []))
+    return len(alive) == 1
+
+
+def _decrement_duel_zone(state: Dict) -> None:
+    if not _duel_zone_active(state):
+        state["duel_turns_left"] = 0
+        state["duel_target_idx"] = None
+        return
+    state["duel_turns_left"] = max(0, int(state.get("duel_turns_left", 0)) - 1)
+    if state["duel_turns_left"] <= 0:
+        state["duel_target_idx"] = None
 
 
 def _hunter_transfer_mark(state: Dict) -> None:
@@ -329,6 +375,9 @@ def _magic_scroll_damage(state: Dict, player: Dict, ap_max: int | None = None) -
     assassin_bonus = _assassin_full_hp_bonus(state, player)
     if assassin_bonus:
         dmg = int(round(dmg * (1.0 + assassin_bonus)))
+    duel_bonus = _duelist_duel_damage_bonus(state, _duelist_duel_active(state))
+    if duel_bonus:
+        dmg = int(round(dmg * (1.0 + duel_bonus)))
     return dmg
 
 def _is_luck_maxed(player: Dict) -> bool:
@@ -790,6 +839,11 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "executioner_onslaught_used": False,
         "executioner_heal_count": 0,
         "executioner_last_breath_turns": 0,
+        "duel_zone_charges": DUELIST_ZONE_CHARGES if _is_duelist({"character_id": chosen_id}) else 0,
+        "duel_turns_left": 0,
+        "duel_target_idx": None,
+        "duelist_blade_used": False,
+        "duelist_parry_used": False,
         "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
@@ -972,6 +1026,9 @@ def roll_damage(
     executioner_bonus = _executioner_damage_bonus(state, target)
     if executioner_bonus:
         dmg = max(1, int(round(dmg * (1.0 + executioner_bonus))))
+    duel_bonus = _duelist_duel_damage_bonus(state, _duelist_duel_active(state))
+    if duel_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + duel_bonus))))
     return dmg
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
@@ -1029,8 +1086,11 @@ def build_enemy_info_text(
             hit_damage = _enemy_damage_to_player(enemy, player, floor)
             state_stub = {"character_id": character_id}
             is_rune_guard = _is_rune_guard(state_stub)
+            is_duelist = _is_duelist(state_stub)
+            duel_active = is_duelist and len(alive) == 1
             assassin_shadow = _assassin_shadow_active(state_stub, player)
             accuracy_bonus = _desperate_charge_accuracy_bonus(state_stub, player)
+            accuracy_bonus += _duelist_duel_accuracy_bonus(state_stub, duel_active)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0) + accuracy_bonus
             enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
             if _has_last_breath(state_stub, player) or assassin_shadow:
@@ -1082,6 +1142,7 @@ def end_turn(state: Dict) -> None:
     _enforce_ap_max_cap(player, state["floor"])
     _apply_rune_guard_shield(state)
     enemy_phase(state)
+    _decrement_duel_zone(state)
     _tally_kills(state)
     _clear_rune_guard_shield(state)
     if state.get("phase") != "dead":
@@ -1092,6 +1153,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     player = state["player"]
     desperate_active = _is_desperate_charge(state, player)
     free_attack = desperate_active and not state.get("desperate_charge_used", False)
+    duel_active = _duelist_duel_active(state)
     if (
         _is_executioner(state)
         and not state.get("executioner_onslaught_used")
@@ -1138,12 +1200,17 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     is_assassin = _is_assassin(state)
     is_executioner = _is_executioner(state)
     is_hunter = _is_hunter(state)
+    is_duelist = _is_duelist(state)
     assassin_shadow = _assassin_shadow_active(state, player)
     is_berserk = _is_berserk(state)
     hunter_first_shot = is_hunter and not state.get("hunter_first_shot_used")
     if hunter_first_shot:
         state["hunter_first_shot_used"] = True
     hunter_accuracy_bonus = _hunter_first_shot_bonus(state) if hunter_first_shot else 0.0
+    duelist_accuracy_bonus = _duelist_duel_accuracy_bonus(state, duel_active)
+    blade_bonus = _duelist_blade_pierce_bonus(state, state.get("duelist_blade_used", False))
+    if blade_bonus:
+        state["duelist_blade_used"] = True
     has_hunter_mark = any(enemy.get("hunter_mark") for enemy in state.get("enemies", []))
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
@@ -1155,13 +1222,20 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         elif is_rune_guard:
             accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
             hit = roll_hit(
-                player["accuracy"] + weapon["accuracy_bonus"] + accuracy_bonus + hunter_accuracy_bonus,
+                player["accuracy"]
+                + weapon["accuracy_bonus"]
+                + accuracy_bonus
+                + hunter_accuracy_bonus
+                + duelist_accuracy_bonus,
                 target["evasion"],
                 state.get("floor"),
             )
         else:
             hit = True if last_breath else roll_hit(
-                player["accuracy"] + weapon["accuracy_bonus"] + hunter_accuracy_bonus,
+                player["accuracy"]
+                + weapon["accuracy_bonus"]
+                + hunter_accuracy_bonus
+                + duelist_accuracy_bonus,
                 target["evasion"],
                 state.get("floor"),
             )
@@ -1173,6 +1247,8 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         )
         if assassin_shadow:
             armor_pierce_bonus = max(armor_pierce_bonus, 1.0)
+        if blade_bonus:
+            armor_pierce_bonus += blade_bonus
         damage = roll_damage(weapon, player, target, state, armor_pierce_bonus=armor_pierce_bonus)
         target["hp"] -= damage
         _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
@@ -1192,6 +1268,9 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
         _apply_stone_skin(state, target)
         target_killed = target["hp"] <= 0
+        if target_killed and state.get("duel_turns_left") and _duel_target(state) is None:
+            state["duel_turns_left"] = 0
+            state["duel_target_idx"] = None
 
         if weapon["splash_ratio"] > 0:
             splash_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
@@ -1348,6 +1427,9 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {target_damage} урона и горит.")
 
     _hunter_transfer_mark(state)
+    if state.get("duel_turns_left") and _duel_target(state) is None:
+        state["duel_turns_left"] = 0
+        state["duel_target_idx"] = None
 
     if (
         _is_assassin(state)
@@ -1374,6 +1456,33 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
 
     check_battle_end(state)
 
+
+def use_duel_zone(state: Dict) -> None:
+    if not _is_duelist(state):
+        _append_log(state, "Дуэльная зона доступна только дуэлянту.")
+        return
+    charges = int(state.get("duel_zone_charges", 0))
+    if charges <= 0:
+        _append_log(state, "Заряды дуэльной зоны закончились.")
+        return
+    enemies = state.get("enemies", [])
+    target_idx = None
+    for idx, enemy in enumerate(enemies):
+        if enemy.get("hp", 0) > 0:
+            target_idx = idx
+            break
+    if target_idx is None:
+        _append_log(state, "Нет врагов для дуэли.")
+        return
+    state["duel_zone_charges"] = charges - 1
+    state["duel_turns_left"] = DUELIST_ZONE_TURNS
+    state["duel_target_idx"] = target_idx
+    target = enemies[target_idx]
+    _append_log(
+        state,
+        f"Дуэльная зона: {target['name']} вызван на дуэль на {DUELIST_ZONE_TURNS} хода.",
+    )
+
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
     enemies = _alive_enemies(state["enemies"])
@@ -1391,12 +1500,21 @@ def enemy_phase(state: Dict) -> None:
 
     _tally_kills(state)
     _hunter_transfer_mark(state)
+    if state.get("duel_turns_left") and _duel_target(state) is None:
+        state["duel_turns_left"] = 0
+        state["duel_target_idx"] = None
     enemies = _alive_enemies(state["enemies"])
     if not enemies:
         return
     group_size = len(enemies)
+    duel_target = _duel_target(state)
+    duel_active = _duel_zone_active(state)
+    if duel_active and duel_target and len(enemies) > 1:
+        _append_log(state, "Дуэльная зона: остальные враги не могут атаковать.")
 
     for enemy in enemies:
+        if duel_active and duel_target is not enemy:
+            continue
         if enemy.get("skip_turns", 0) > 0:
             enemy["skip_turns"] -= 1
             _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
@@ -1414,6 +1532,16 @@ def enemy_phase(state: Dict) -> None:
             hit = random.random() < _enemy_base_hit_chance(enemy, player["evasion"], floor)
         if hit:
             damage = _enemy_damage_to_player(enemy, player, state.get("floor", 1))
+            if _is_duelist(state) and not state.get("duelist_parry_used"):
+                state["duelist_parry_used"] = True
+                reduced_damage = max(0, int(round(damage * (1.0 - DUELIST_PARRY_REDUCTION))))
+                prevented = max(0, damage - reduced_damage)
+                damage = reduced_damage
+                if prevented > 0:
+                    counter = max(1, int(round(prevented * DUELIST_PARRY_COUNTER_RATIO)))
+                    enemy["hp"] -= counter
+                    _apply_stone_skin(state, enemy)
+                    _append_log(state, f"Парирование: {enemy['name']} получает {counter} урона.")
             player["hp"] -= damage
             total_damage += damage
             _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
@@ -1791,6 +1919,12 @@ def advance_floor(state: Dict) -> None:
     state["boss_artifacts"] = []
     state["show_info"] = False
     state["cursed_ap_ratio"] = None
+    if _is_duelist(state):
+        state["duel_zone_charges"] = DUELIST_ZONE_CHARGES
+    else:
+        state["duel_zone_charges"] = 0
+    state["duel_turns_left"] = 0
+    state["duel_target_idx"] = None
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
     if is_any_boss_floor(state["floor"]):
@@ -1836,18 +1970,21 @@ def render_state(state: Dict) -> str:
 
     is_rune_guard = _is_rune_guard(state)
     last_breath_active = _has_last_breath(state, player)
+    is_duelist = _is_duelist(state)
+    duel_active = _duelist_duel_active(state)
     assassin_shadow_active = _assassin_shadow_active(state, player)
     desperate_charge_active = _is_desperate_charge(state, player)
     base_accuracy = player["accuracy"]
     accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
+    accuracy_bonus += _duelist_duel_accuracy_bonus(state, duel_active)
     effective_accuracy = _clamp(base_accuracy + accuracy_bonus, 0.0, 0.95)
-    if desperate_charge_active and accuracy_bonus > 0:
+    if last_breath_active or assassin_shadow_active:
+        accuracy_display = "∞"
+    elif accuracy_bonus > 0:
         accuracy_display = (
             f"{_percent(base_accuracy, show_percent=False)} "
             f"(эфф. {_percent(effective_accuracy, show_percent=False)})"
         )
-    elif last_breath_active or assassin_shadow_active:
-        accuracy_display = "∞"
     else:
         accuracy_display = _percent(base_accuracy, show_percent=False)
 
@@ -1899,6 +2036,15 @@ def render_state(state: Dict) -> str:
         status_notes.append("Эхо убийства — готово")
     if _is_assassin(state):
         status_notes.append("Ядовитые настои — зелья +2 HP")
+    if is_duelist and duel_active:
+        status_notes.append("Дуэль — урон +25%, точность +15%")
+    if is_duelist and state.get("duel_turns_left"):
+        turns_left = int(state.get("duel_turns_left", 0))
+        status_notes.append(f"Дуэльная зона — {turns_left} ход.")
+    if is_duelist and not state.get("duelist_parry_used"):
+        status_notes.append("Парирование — готово")
+    if is_duelist and not state.get("duelist_blade_used"):
+        status_notes.append("Клинок чести — бронепробой 25%")
     if _is_hunter(state) and not state.get("hunter_first_shot_used"):
         status_notes.append("Выверенный выстрел — +10% точности")
     if _is_hunter(state) and not state.get("hunter_kill_used"):
@@ -1954,10 +2100,16 @@ def render_state(state: Dict) -> str:
     if state["phase"] in {"battle", "forfeit_confirm", "tutorial"}:
         if enemies:
             lines.append(f"<b>Враги ({len(enemies)}):</b>")
+            duel_target = _duel_target(state)
             for enemy in enemies:
                 name = enemy["name"]
+                tags = []
                 if enemy.get("hunter_mark"):
-                    name = f"{name} (метка)"
+                    tags.append("метка")
+                if duel_target is enemy:
+                    tags.append("дуэль")
+                if tags:
+                    name = f"{name} ({', '.join(tags)})"
                 lines.append(f"- <b>{name}</b>: {enemy['hp']}/{enemy['max_hp']} HP")
         else:
             lines.append("<i>Враги отсутствуют.</i>")
@@ -2052,6 +2204,12 @@ def render_state(state: Dict) -> str:
             config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
             magic_damage = int(config.get("scroll_hit", magic_damage))
         lines.append(f"<b>Магический урон:</b> {magic_damage} | <b>Стоимость:</b> 1 ОД")
+        if _is_duelist(state):
+            charges = int(state.get("duel_zone_charges", 0))
+            lines.append(
+                f"<b>Дуэльная зона:</b> {charges}/{DUELIST_ZONE_CHARGES} "
+                f"(эффект {DUELIST_ZONE_TURNS} хода)",
+            )
         scrolls = player.get("scrolls", [])
         if scrolls:
             grouped = {}
