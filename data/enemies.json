@@ -37,7 +37,7 @@
   },
   {
     "id": "cultist",
-    "name": "Культист",
+    "name": "Гоблин",
     "base_hp": 10,
     "base_attack": 6,
     "base_armor": 1,
@@ -127,7 +127,7 @@
   },
   {
     "id": "plague_mage",
-    "name": "Чумной маг",
+    "name": "Чернокнижник",
     "base_hp": 14,
     "base_attack": 8,
     "base_armor": 1,
@@ -220,7 +220,7 @@
   },
   {
     "id": "stone_hide",
-    "name": "Каменная шкура",
+    "name": "Окаменелый Хранитель",
     "base_hp": 26,
     "base_attack": 7,
     "base_armor": 3,
