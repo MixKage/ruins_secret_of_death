@@ -8,6 +8,7 @@ DESPERATE_CHARGE_THRESHOLD_RATIO = 1 / 3
 DEFAULT_CHARACTER_ID = "wanderer"
 RUNE_GUARD_ID = "rune_guard"
 BERSERK_ID = "berserk"
+ASSASSIN_ID = "assassin"
 RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
@@ -23,6 +24,14 @@ BERSERK_RAGE_TIERS = [
     ("Ярость III", 0.2, 0.45),
     ("Ярость IV", 0.0, 0.65),
 ]
+ASSASSIN_HP_PENALTY = 4
+ASSASSIN_ARMOR_PENALTY = 1.0
+ASSASSIN_EVASION_BONUS = 0.10
+ASSASSIN_ACCURACY_BONUS = 0.05
+ASSASSIN_FULL_HP_BONUS = 0.40
+ASSASSIN_BACKSTAB_BONUS = 0.20
+ASSASSIN_ECHO_RATIO = 0.50
+ASSASSIN_POTION_HP_BONUS = 2
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
@@ -58,6 +67,18 @@ CHARACTERS = {
             "Неистовая живучесть: первый смертельный удар за игру полностью восстанавливает HP.",
         ],
     },
+    ASSASSIN_ID: {
+        "id": ASSASSIN_ID,
+        "name": "Ассасин",
+        "description": [
+            "HP -4, броня -1, уклонение +10%, точность +5%.",
+            "Безупречный удар: при полном HP урон +40%.",
+            "Последняя тень: при HP ≤ 1/3 игнор брони и уклонения цели.",
+            "Эхо убийства: первое убийство за ход наносит 50% урона всем врагам.",
+            "Клинок в спину: первая атака по цели с полным HP наносит +20% урона.",
+            "Ядовитые настои: зелья дают +2 HP.",
+        ],
+    },
 }
 
 
@@ -86,6 +107,16 @@ def apply_character_starting_stats(player: Dict, character_id: str) -> None:
         player["hp"] += BERSERK_HP_BONUS
         player["armor"] = float(player.get("armor", 0.0)) - BERSERK_ARMOR_PENALTY
         return
+    if character_id == ASSASSIN_ID:
+        player["hp_max"] = max(1, int(player.get("hp_max", 1)) - ASSASSIN_HP_PENALTY)
+        player["hp"] = max(
+            1,
+            min(player["hp_max"], int(player.get("hp", player["hp_max"])) - ASSASSIN_HP_PENALTY),
+        )
+        player["armor"] = float(player.get("armor", 0.0)) - ASSASSIN_ARMOR_PENALTY
+        player["evasion"] = float(player.get("evasion", 0.0)) + ASSASSIN_EVASION_BONUS
+        player["accuracy"] = float(player.get("accuracy", 0.0)) + ASSASSIN_ACCURACY_BONUS
+        return
 
 
 def _is_rune_guard(state: Dict) -> bool:
@@ -94,6 +125,10 @@ def _is_rune_guard(state: Dict) -> bool:
 
 def _is_berserk(state: Dict) -> bool:
     return resolve_character_id(state.get("character_id")) == BERSERK_ID
+
+
+def _is_assassin(state: Dict) -> bool:
+    return resolve_character_id(state.get("character_id")) == ASSASSIN_ID
 
 
 def _is_default_character(state: Dict) -> bool:
@@ -144,6 +179,38 @@ def _berserk_damage_bonus(state: Dict, player: Dict) -> float:
     if not rage:
         return 0.0
     return rage[1]
+
+
+def _assassin_full_hp_bonus(state: Dict, player: Dict) -> float:
+    if _is_assassin(state) and _is_full_hp(player):
+        return ASSASSIN_FULL_HP_BONUS
+    return 0.0
+
+
+def _assassin_shadow_active(state: Dict, player: Dict) -> bool:
+    return _is_assassin(state) and _is_last_breath(player)
+
+
+def _assassin_backstab_bonus(state: Dict, target: Dict) -> float:
+    if not _is_assassin(state):
+        return 0.0
+    hp = int(target.get("hp", 0))
+    max_hp = int(target.get("max_hp", 0))
+    if max_hp > 0 and hp >= max_hp:
+        return ASSASSIN_BACKSTAB_BONUS
+    return 0.0
+
+
+def _assassin_echo_ratio(state: Dict) -> float:
+    if _is_assassin(state):
+        return ASSASSIN_ECHO_RATIO
+    return 0.0
+
+
+def _assassin_potion_bonus(state: Dict) -> int:
+    if _is_assassin(state):
+        return ASSASSIN_POTION_HP_BONUS
+    return 0
 
 
 def _is_desperate_charge(state: Dict, player: Dict | None = None) -> bool:

@@ -8,12 +8,18 @@ from .characters import (
     RUNE_GUARD_RETRIBUTION_PIERCE,
     RUNE_GUARD_RETRIBUTION_THRESHOLD,
     RUNE_GUARD_SHIELD_BONUS,
+    _assassin_backstab_bonus,
+    _assassin_echo_ratio,
+    _assassin_full_hp_bonus,
+    _assassin_potion_bonus,
+    _assassin_shadow_active,
     _berserk_damage_bonus,
     _berserk_rage_state,
     _desperate_charge_accuracy_bonus,
     _has_last_breath,
     _has_resolve,
     _has_steady_breath,
+    _is_assassin,
     _is_berserk,
     _is_desperate_charge,
     _is_rune_guard,
@@ -166,6 +172,7 @@ def _refresh_turn_ap(state: Dict) -> None:
         return
     state["desperate_charge_used"] = False
     state["berserk_kill_used"] = False
+    state["assassin_echo_used"] = False
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
@@ -266,6 +273,9 @@ def _magic_scroll_damage(state: Dict, player: Dict, ap_max: int | None = None) -
     berserk_bonus = _berserk_damage_bonus(state, player)
     if berserk_bonus:
         dmg = int(round(dmg * (1.0 + berserk_bonus)))
+    assassin_bonus = _assassin_full_hp_bonus(state, player)
+    if assassin_bonus:
+        dmg = int(round(dmg * (1.0 + assassin_bonus)))
     return dmg
 
 def _is_luck_maxed(player: Dict) -> bool:
@@ -720,6 +730,7 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "ap_bonus": 0,
         "desperate_charge_used": False,
         "berserk_kill_used": False,
+        "assassin_echo_used": False,
         "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
@@ -890,6 +901,12 @@ def roll_damage(
     berserk_bonus = _berserk_damage_bonus(state, player)
     if berserk_bonus:
         dmg = max(1, int(round(dmg * (1.0 + berserk_bonus))))
+    assassin_bonus = _assassin_full_hp_bonus(state, player)
+    if assassin_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + assassin_bonus))))
+    backstab_bonus = _assassin_backstab_bonus(state, target)
+    if backstab_bonus:
+        dmg = max(1, int(round(dmg * (1.0 + backstab_bonus))))
     return dmg
 
 def _floor_range_label(min_floor: int, max_floor: int) -> str:
@@ -947,10 +964,11 @@ def build_enemy_info_text(
             hit_damage = _enemy_damage_to_player(enemy, player, floor)
             state_stub = {"character_id": character_id}
             is_rune_guard = _is_rune_guard(state_stub)
+            assassin_shadow = _assassin_shadow_active(state_stub, player)
             accuracy_bonus = _desperate_charge_accuracy_bonus(state_stub, player)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0) + accuracy_bonus
             enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
-            if _has_last_breath(state_stub, player):
+            if _has_last_breath(state_stub, player) or assassin_shadow:
                 hit_chance = 1.0
             else:
                 hit_chance = _clamp(player_accuracy - enemy_evasion, 0.15, 0.95)
@@ -970,6 +988,8 @@ def build_enemy_info_text(
                 pierce_pct = int(round(evasion_pierce * 100))
                 damage_text = f"{damage_text} | <b>Игнор уклонения:</b> {pierce_pct}%"
             armor_pierce = weapon.get("armor_pierce", 0.0)
+            if assassin_shadow:
+                armor_pierce = max(armor_pierce, 1.0)
             pierce_pct = int(round(armor_pierce * 100))
             if pierce_pct > 0:
                 effective_armor = enemy_armor * (1.0 - armor_pierce)
@@ -1024,15 +1044,20 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     alive_before = len(_alive_enemies(state["enemies"]))
 
     shadow_evaded = False
+    target_killed = False
     last_breath = _has_last_breath(state, player)
     is_rune_guard = _is_rune_guard(state)
+    is_assassin = _is_assassin(state)
+    assassin_shadow = _assassin_shadow_active(state, player)
     is_berserk = _is_berserk(state)
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
         shadow_evaded = True
         hit = False
     else:
-        if is_rune_guard:
+        if assassin_shadow:
+            hit = True
+        elif is_rune_guard:
             accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
             hit = roll_hit(
                 player["accuracy"] + weapon["accuracy_bonus"] + accuracy_bonus,
@@ -1050,6 +1075,8 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         armor_pierce_bonus = (
             RUNE_GUARD_RETRIBUTION_PIERCE if retribution_ready else 0.0
         )
+        if assassin_shadow:
+            armor_pierce_bonus = max(armor_pierce_bonus, 1.0)
         damage = roll_damage(weapon, player, target, state, armor_pierce_bonus=armor_pierce_bonus)
         target["hp"] -= damage
         _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
@@ -1057,6 +1084,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             state["rune_guard_retribution_ready"] = False
             _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
         _apply_stone_skin(state, target)
+        target_killed = target["hp"] <= 0
 
         if weapon["splash_ratio"] > 0:
             splash_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
@@ -1080,6 +1108,22 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
 
     alive_after = len(_alive_enemies(state["enemies"]))
     killed = max(0, alive_before - alive_after)
+    if (
+        is_assassin
+        and target_killed
+        and not state.get("assassin_echo_used")
+        and _assassin_echo_ratio(state) > 0
+    ):
+        state["assassin_echo_used"] = True
+        echo_damage = max(1, int(round(damage * _assassin_echo_ratio(state))))
+        echo_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
+        if echo_targets:
+            for enemy in echo_targets:
+                enemy["hp"] -= echo_damage
+                _apply_stone_skin(state, enemy)
+            _append_log(state, f"Эхо убийства: {echo_damage} урона по {len(echo_targets)} врагам.")
+        alive_after = len(_alive_enemies(state["enemies"]))
+        killed = max(0, alive_before - alive_after)
     if killed > 0 and is_berserk and not state.get("berserk_kill_used"):
         state["berserk_kill_used"] = True
         ap_before = player.get("ap", 0)
@@ -1099,9 +1143,11 @@ def player_use_potion(state: Dict) -> None:
         return
 
     potion = player["potions"].pop()
-    player["hp"] = min(player["hp_max"], player["hp"] + potion["heal"])
+    bonus_heal = _assassin_potion_bonus(state)
+    heal = int(potion.get("heal", 0)) + bonus_heal
+    player["hp"] = min(player["hp_max"], player["hp"] + heal)
     player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
-    _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
+    _append_log(state, f"Вы используете зелье: +{heal} HP, +{potion['ap_restore']} ОД.")
 
     check_battle_end(state)
 
@@ -1111,9 +1157,11 @@ def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
     for idx, potion in enumerate(potions):
         if potion.get("id") == potion_id:
             potion = potions.pop(idx)
-            player["hp"] = min(player["hp_max"], player["hp"] + potion["heal"])
+            bonus_heal = _assassin_potion_bonus(state)
+            heal = int(potion.get("heal", 0)) + bonus_heal
+            player["hp"] = min(player["hp_max"], player["hp"] + heal)
             player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
-            _append_log(state, f"Вы используете зелье: +{potion['heal']} HP, +{potion['ap_restore']} ОД.")
+            _append_log(state, f"Вы используете зелье: +{heal} HP, +{potion['ap_restore']} ОД.")
             check_battle_end(state)
             return
     _append_log(state, "Нет подходящего зелья.")
@@ -1135,6 +1183,7 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         _append_log(state, "Некого поражать магией.")
         return
 
+    alive_before = len(_alive_enemies(state["enemies"]))
     scroll = scrolls.pop(scroll_index)
     player["ap"] -= 1
     damage = _magic_scroll_damage(state, player, ap_max=_effective_ap_max(state))
@@ -1156,6 +1205,22 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
         _apply_stone_skin(state, target)
         _apply_burn(target, damage)
         _append_log(state, f"Вы читаете {scroll['name']}: {target['name']} получает {damage} урона и горит.")
+
+    if (
+        _is_assassin(state)
+        and not state.get("assassin_echo_used")
+        and _assassin_echo_ratio(state) > 0
+    ):
+        alive_after = len(_alive_enemies(state["enemies"]))
+        if alive_after < alive_before:
+            state["assassin_echo_used"] = True
+            echo_damage = max(1, int(round(damage * _assassin_echo_ratio(state))))
+            echo_targets = [enemy for enemy in state["enemies"] if enemy.get("hp", 0) > 0]
+            for enemy in echo_targets:
+                enemy["hp"] -= echo_damage
+                _apply_stone_skin(state, enemy)
+            if echo_targets:
+                _append_log(state, f"Эхо убийства: {echo_damage} урона по {len(echo_targets)} врагам.")
 
     check_battle_end(state)
 
@@ -1620,6 +1685,7 @@ def render_state(state: Dict) -> str:
 
     is_rune_guard = _is_rune_guard(state)
     last_breath_active = _has_last_breath(state, player)
+    assassin_shadow_active = _assassin_shadow_active(state, player)
     desperate_charge_active = _is_desperate_charge(state, player)
     base_accuracy = player["accuracy"]
     accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
@@ -1629,7 +1695,7 @@ def render_state(state: Dict) -> str:
             f"{_percent(base_accuracy, show_percent=False)} "
             f"(эфф. {_percent(effective_accuracy, show_percent=False)})"
         )
-    elif last_breath_active:
+    elif last_breath_active or assassin_shadow_active:
         accuracy_display = "∞"
     else:
         accuracy_display = _percent(base_accuracy, show_percent=False)
@@ -1674,6 +1740,14 @@ def render_state(state: Dict) -> str:
     status_notes = []
     if _has_resolve(state, player):
         status_notes.append("Решимость — урон +20%")
+    if _assassin_full_hp_bonus(state, player):
+        status_notes.append("Безупречный удар — урон +40%")
+    if assassin_shadow_active:
+        status_notes.append("Последняя тень — игнор брони и уклонения")
+    if _is_assassin(state) and not state.get("assassin_echo_used"):
+        status_notes.append("Эхо убийства — готово")
+    if _is_assassin(state):
+        status_notes.append("Ядовитые настои — зелья +2 HP")
     rage_state = _berserk_rage_state(state, player)
     if rage_state:
         rage_name, rage_bonus = rage_state
@@ -1772,6 +1846,11 @@ def render_state(state: Dict) -> str:
         small_heal, small_ap = _potion_stats(player, "potion_small")
         medium_heal, medium_ap = _potion_stats(player, "potion_medium")
         strong_heal, strong_ap = _potion_stats(player, "potion_strong")
+        potion_bonus = _assassin_potion_bonus(state)
+        if potion_bonus:
+            small_heal += potion_bonus
+            medium_heal += potion_bonus
+            strong_heal += potion_bonus
         if small_count > 0:
             small_limit = POTION_LIMITS.get("potion_small", small_count)
             lines.append(
