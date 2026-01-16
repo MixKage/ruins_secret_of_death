@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from bot import db
+from bot.game.characters import get_character
 from bot.progress import ensure_current_season, season_label, xp_to_level
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import leaderboard_kb, main_menu_kb
@@ -21,10 +22,13 @@ def _format_leaderboard(rows, page: int, total_pages: int, season_key: str) -> s
         return "<i>Рейтинг пуст.</i>"
     lines = [f"<b>Рейтинг {season_label(season_key)}:</b> страница {page}/{total_pages}"]
     start_rank = (page - 1) * PAGE_SIZE + 1
-    for idx, (username, max_floor, xp) in enumerate(rows, start=start_rank):
+    for idx, (username, max_floor, xp, character_id) in enumerate(rows, start=start_rank):
         name = escape(username) if username else "Без имени"
         level, _current, _need = xp_to_level(int(xp or 0))
-        lines.append(f"{idx}. {name} — этаж <b>{max_floor}</b> | ур. <b>{level}</b>")
+        hero = get_character(character_id).get("name", "Рыцарь")
+        lines.append(
+            f"{idx}. {name} — этаж <b>{max_floor}</b> | ур. <b>{level}</b> | герой <b>{hero}</b>"
+        )
     return "\n".join(lines)
 
 

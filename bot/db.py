@@ -111,6 +111,7 @@ async def init_db() -> None:
                 deaths INTEGER DEFAULT 0,
                 deaths_by_floor TEXT DEFAULT "{}",
                 kills_json TEXT DEFAULT "{}",
+                hero_runs_json TEXT DEFAULT "{}",
                 treasures_found INTEGER DEFAULT 0,
                 chests_opened INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -141,6 +142,7 @@ async def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 season_id INTEGER NOT NULL,
                 max_floor INTEGER DEFAULT 0,
+                max_floor_character TEXT DEFAULT "wanderer",
                 total_runs INTEGER DEFAULT 0,
                 deaths INTEGER DEFAULT 0,
                 deaths_by_floor TEXT DEFAULT "{}",
@@ -176,6 +178,7 @@ async def init_db() -> None:
         )
         await _ensure_user_columns(db)
         await _ensure_run_columns(db)
+        await _ensure_user_stats_columns(db)
         await _ensure_user_season_columns(db)
         await _backfill_season0_stats(db)
         await _execute(db, 
@@ -205,6 +208,32 @@ async def _ensure_run_columns(db: aiosqlite.Connection) -> None:
         await db.commit()
 
 
+async def _ensure_user_stats_columns(db: aiosqlite.Connection) -> None:
+    cursor = await _execute(db, "PRAGMA table_info(user_stats)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "hero_runs_json" not in columns:
+        await _execute(
+            db,
+            "ALTER TABLE user_stats ADD COLUMN hero_runs_json TEXT DEFAULT \"{}\"",
+        )
+        await db.commit()
+    cursor = await _execute(
+        db,
+        "SELECT user_id, total_runs, hero_runs_json FROM user_stats",
+    )
+    rows = await cursor.fetchall()
+    for user_id, total_runs, hero_runs_json in rows:
+        if hero_runs_json and hero_runs_json != "{}":
+            continue
+        hero_runs = {"wanderer": int(total_runs or 0)}
+        await _execute(
+            db,
+            "UPDATE user_stats SET hero_runs_json = ? WHERE user_id = ?",
+            (json.dumps(hero_runs), user_id),
+        )
+    await db.commit()
+
+
 async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
     cursor = await _execute(db, "PRAGMA table_info(user_season_stats)")
     columns = {row[1] for row in await cursor.fetchall()}
@@ -220,6 +249,18 @@ async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
             "ALTER TABLE user_season_stats ADD COLUMN deaths_by_floor TEXT DEFAULT \"{}\"",
         )
         await db.commit()
+    if "max_floor_character" not in columns:
+        await _execute(
+            db,
+            "ALTER TABLE user_season_stats ADD COLUMN max_floor_character TEXT DEFAULT \"wanderer\"",
+        )
+        await db.commit()
+    await _execute(
+        db,
+        "UPDATE user_season_stats SET max_floor_character = \"wanderer\" "
+        "WHERE max_floor_character IS NULL OR max_floor_character = \"\"",
+    )
+    await db.commit()
 
 
 async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
@@ -259,6 +300,7 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             user_id,
             {
                 "max_floor": 0,
+                "max_floor_character": "wanderer",
                 "total_runs": 0,
                 "kills": {},
                 "treasures_found": 0,
@@ -274,7 +316,9 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             except json.JSONDecodeError:
                 state = {}
         floor_value = int(state.get("floor", 0) or max_floor or 0)
-        agg["max_floor"] = max(agg["max_floor"], floor_value)
+        if floor_value > agg["max_floor"]:
+            agg["max_floor"] = floor_value
+            agg["max_floor_character"] = state.get("character_id") or "wanderer"
         agg["treasures_found"] += int(state.get("treasures_found", 0))
         agg["chests_opened"] += int(state.get("chests_opened", 0))
         treasure_xp = int(state.get("treasure_xp", 0))
@@ -290,11 +334,12 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             (user_id, season_id),
         )
         await _execute(db, 
-            "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, kills_json = ?, "
+            "UPDATE user_season_stats SET max_floor = ?, max_floor_character = ?, total_runs = ?, kills_json = ?, "
             "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
             (
                 data["max_floor"],
+                data.get("max_floor_character", "wanderer"),
                 data["total_runs"],
                 json.dumps(data["kills"]),
                 data["treasures_found"],
@@ -517,7 +562,7 @@ async def record_season_stats(
             (user_id, season_id),
         )
         cursor = await _execute(db, 
-            "SELECT max_floor, total_runs, deaths, deaths_by_floor, kills_json, "
+            "SELECT max_floor, max_floor_character, total_runs, deaths, deaths_by_floor, kills_json, "
             "treasures_found, chests_opened, xp_gained "
             "FROM user_season_stats WHERE user_id = ? AND season_id = ?",
             (user_id, season_id),
@@ -525,6 +570,7 @@ async def record_season_stats(
         row = await cursor.fetchone()
         (
             max_floor,
+            max_floor_character,
             total_runs,
             deaths,
             deaths_by_floor,
@@ -534,6 +580,7 @@ async def record_season_stats(
             xp_gained,
         ) = row or (
             0,
+            "wanderer",
             0,
             0,
             "{}",
@@ -543,7 +590,12 @@ async def record_season_stats(
             0,
         )
 
-        max_floor = max(max_floor or 0, int(state.get("floor", 0)))
+        old_max_floor = max_floor or 0
+        floor_value = int(state.get("floor", 0))
+        max_floor = max(old_max_floor, floor_value)
+        max_floor_character = max_floor_character or "wanderer"
+        if floor_value > old_max_floor:
+            max_floor_character = state.get("character_id") or "wanderer"
         total_runs = (total_runs or 0) + 1
         deaths = deaths or 0
         deaths_by_floor = json.loads(deaths_by_floor or "{}")
@@ -562,12 +614,13 @@ async def record_season_stats(
             kills[enemy_id] = kills.get(enemy_id, 0) + int(count)
 
         await _execute(db, 
-            "UPDATE user_season_stats SET max_floor = ?, total_runs = ?, deaths = ?, "
+            "UPDATE user_season_stats SET max_floor = ?, max_floor_character = ?, total_runs = ?, deaths = ?, "
             "deaths_by_floor = ?, kills_json = ?, treasures_found = ?, chests_opened = ?, "
             "xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
             (
                 max_floor,
+                max_floor_character,
                 total_runs,
                 deaths,
                 json.dumps(deaths_by_floor),
@@ -627,7 +680,7 @@ async def get_season_leaderboard_total(season_id: int) -> int:
 async def get_season_leaderboard_page(season_id: int, limit: int, offset: int) -> List[Tuple]:
     async with _connect() as db:
         cursor = await _execute(db, 
-            "SELECT users.username, user_season_stats.max_floor, users.xp "
+            "SELECT users.username, user_season_stats.max_floor, users.xp, user_season_stats.max_floor_character "
             "FROM user_season_stats "
             "JOIN users ON users.id = user_season_stats.user_id "
             "WHERE user_season_stats.season_id = ? "
@@ -989,7 +1042,7 @@ async def get_leaderboard_with_ids(limit: int = 10) -> List[Tuple]:
 async def get_season_leaderboard_with_ids(season_id: int, limit: int = 10) -> List[Tuple]:
     async with _connect() as db:
         cursor = await _execute(db, 
-            "SELECT users.id, users.username, user_season_stats.max_floor "
+            "SELECT users.id, users.username, user_season_stats.max_floor, user_season_stats.max_floor_character "
             "FROM user_season_stats "
             "JOIN users ON users.id = user_season_stats.user_id "
             "WHERE user_season_stats.season_id = ? AND user_season_stats.max_floor > 0 "
@@ -1002,19 +1055,21 @@ async def get_season_leaderboard_with_ids(season_id: int, limit: int = 10) -> Li
 async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
     async with _connect() as db:
         cursor = await _execute(db, 
-            "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
+            "SELECT total_runs, deaths, deaths_by_floor, kills_json, hero_runs_json, "
+            "treasures_found, chests_opened "
             "FROM user_stats WHERE user_id = ?",
             (user_id,),
         )
         row = await cursor.fetchone()
         if not row:
             return None
-        total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened = row
+        total_runs, deaths, deaths_by_floor, kills_json, hero_runs_json, treasures_found, chests_opened = row
         return {
             "total_runs": total_runs or 0,
             "deaths": deaths or 0,
             "deaths_by_floor": json.loads(deaths_by_floor or "{}"),
             "kills": json.loads(kills_json or "{}"),
+            "hero_runs": json.loads(hero_runs_json or "{}"),
             "treasures_found": treasures_found or 0,
             "chests_opened": chests_opened or 0,
         }
@@ -1027,19 +1082,30 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
             (user_id,),
         )
         cursor = await _execute(db, 
-            "SELECT total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened "
+            "SELECT total_runs, deaths, deaths_by_floor, kills_json, hero_runs_json, treasures_found, chests_opened "
             "FROM user_stats WHERE user_id = ?",
             (user_id,),
         )
         row = await cursor.fetchone()
-        total_runs, deaths, deaths_by_floor, kills_json, treasures_found, chests_opened = row or (0, 0, "{}", "{}", 0, 0)
+        total_runs, deaths, deaths_by_floor, kills_json, hero_runs_json, treasures_found, chests_opened = row or (
+            0,
+            0,
+            "{}",
+            "{}",
+            "{}",
+            0,
+            0,
+        )
 
         total_runs = (total_runs or 0) + 1
         deaths = deaths or 0
         deaths_by_floor = json.loads(deaths_by_floor or "{}")
         kills = json.loads(kills_json or "{}")
+        hero_runs = json.loads(hero_runs_json or "{}")
         treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
         chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
+        hero_id = state.get("character_id") or "wanderer"
+        hero_runs[hero_id] = hero_runs.get(hero_id, 0) + 1
 
         if died:
             deaths += 1
@@ -1051,13 +1117,15 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
 
         await _execute(db, 
             "UPDATE user_stats SET total_runs = ?, deaths = ?, deaths_by_floor = ?, "
-            "kills_json = ?, treasures_found = ?, chests_opened = ?, updated_at = CURRENT_TIMESTAMP "
+            "kills_json = ?, hero_runs_json = ?, treasures_found = ?, chests_opened = ?, "
+            "updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ?",
             (
                 total_runs,
                 deaths,
                 json.dumps(deaths_by_floor),
                 json.dumps(kills),
+                json.dumps(hero_runs),
                 treasures_found,
                 chests_opened,
                 user_id,

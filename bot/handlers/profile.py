@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.handlers.helpers import get_user_row, is_admin_user
+from bot.game.characters import get_character
 from bot.keyboards import main_menu_kb
 from bot.progress import BADGES, ensure_current_season, progress_bar, season_label, xp_to_level
 from bot.utils.telegram import edit_or_send
@@ -120,6 +121,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
 
     total_kills = sum((total_stats.get("kills") or {}).values())
     season_kills = sum((season_stats.get("kills") or {}).values())
+    hero_runs = total_stats.get("hero_runs", {}) or {}
 
     username = profile.get("username") or "Без имени"
     created_at = _format_date(profile.get("created_at"))
@@ -155,6 +157,13 @@ async def profile_callback(callback: CallbackQuery) -> None:
         f"- Сундуков открыто: {total_stats.get('chests_opened', 0)}",
         f"- Сокровищ найдено: {total_stats.get('treasures_found', 0)}",
     ]
+    if hero_runs:
+        lines.append("")
+        lines.append("<b>Забеги по героям:</b>")
+        sorted_runs = sorted(hero_runs.items(), key=lambda item: (-int(item[1]), item[0]))
+        for hero_id, count in sorted_runs:
+            hero_name = get_character(hero_id).get("name", hero_id)
+            lines.append(f"- {hero_name}: {count}")
 
     lines.append("")
     lines.append("<b>Претендуемые награды сезона:</b>")
