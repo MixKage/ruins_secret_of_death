@@ -118,6 +118,28 @@ pip install -r requirements.txt
 python -m bot.main
 ```
 
+## Docker
+1) Создать файл `.env` в корне проекта:
+
+```bash
+BOT_TOKEN="<token>"
+ADMIN_IDS="123,456"
+```
+
+2) Создать файл базы на хосте:
+
+```bash
+touch ruins.db
+```
+
+3) Собрать и запустить контейнер:
+
+```bash
+docker compose up -d --build
+```
+
+4) База данных хранится на хосте в `./ruins.db` (файл сохраняется при перезапуске контейнера).
+
 ## Структура данных (SQLite)
 - `users`: id, telegram_id, username, max_floor, xp, created_at
 - `runs`: id, user_id, started_at, ended_at, max_floor, is_active, state_json

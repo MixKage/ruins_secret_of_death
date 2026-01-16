@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  ruins-bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_IDS: ${ADMIN_IDS}
+    volumes:
+      - ./ruins.db:/app/ruins.db
