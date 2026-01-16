@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from bot.game.characters import CHARACTERS
 from bot.game.data import ENEMIES, SCROLLS, UPGRADES, WEAPONS
 from bot.game.logic import WEAPON_RARITY_TIERS
 from bot.keyboards import rules_back_kb, rules_menu_kb
@@ -25,7 +26,7 @@ BADGE_REQUIREMENTS = {
 
 RULES_MENU_TEXT = (
     "<b>Правила и справка</b>\n"
-    "Выберите раздел ниже, чтобы узнать детали о механиках руин."
+    "Выберите раздел ниже, чтобы узнать детали о механиках руин и героях."
 )
 
 
@@ -125,6 +126,21 @@ def _format_magic() -> str:
     return "\n".join(lines)
 
 
+def _format_characters() -> str:
+    lines = [
+        "<b>Игровые персонажи</b>",
+        "Каждый герой имеет уникальные эффекты и стартовые параметры.",
+        "",
+    ]
+    for character in CHARACTERS.values():
+        name = character.get("name", "Герой")
+        lines.append(f"<b>{name}</b>")
+        for desc in character.get("description", []):
+            lines.append(f"- {desc}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def _format_upgrades() -> str:
     lines = ["<b>Улучшения</b>"]
     for item in UPGRADES:
@@ -200,6 +216,12 @@ async def rules_enemies_callback(callback: CallbackQuery) -> None:
 async def rules_magic_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     await edit_or_send(callback, _format_magic(), reply_markup=rules_back_kb())
+
+
+@router.callback_query(F.data == "rules:characters")
+async def rules_characters_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await edit_or_send(callback, _format_characters(), reply_markup=rules_back_kb())
 
 
 @router.callback_query(F.data == "rules:upgrades")
