@@ -44,6 +44,7 @@ def battle_kb(
     if has_potion:
         builder.button(text="Зелье", callback_data="action:potion")
     builder.button(text="Инвентарь", callback_data="action:inventory")
+    builder.button(text="Испытания руин", callback_data="action:run_tasks")
     info_text = "Скрыть справку" if show_info else "Справка"
     builder.button(text=info_text, callback_data="action:info")
     builder.button(text="Сдаться", callback_data="action:forfeit")
@@ -106,6 +107,12 @@ def inventory_kb(scrolls: list, duel_zone_charges: int | None = None) -> InlineK
             label = f"{label} x{duel_zone_charges}"
         builder.button(text=label, callback_data="inventory:duel_zone")
     builder.button(text="Назад", callback_data="inventory:back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def run_tasks_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Назад", callback_data="run_tasks:back")
     builder.adjust(1)
     return builder.as_markup()
 

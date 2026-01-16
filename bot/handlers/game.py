@@ -40,6 +40,7 @@ from bot.keyboards import (
     inventory_kb,
     potion_kb,
     main_menu_kb,
+    run_tasks_kb,
     reward_kb,
     treasure_kb,
     forfeit_confirm_kb,
@@ -283,6 +284,8 @@ def _markup_for_state(state: dict, is_admin: bool = False):
             else None
         )
         return inventory_kb(state["player"].get("scrolls", []), duel_zone_charges=duel_charges)
+    if state["phase"] == "run_tasks":
+        return run_tasks_kb()
     if state["phase"] == "potion_select":
         small_count = count_potions(state["player"], "potion_small")
         medium_count = count_potions(state["player"], "potion_medium")
@@ -482,6 +485,12 @@ async def battle_action(callback: CallbackQuery) -> None:
         await callback.answer()
         await _send_state(callback, state, run_id)
         return
+    elif action == "run_tasks":
+        state["phase"] = "run_tasks"
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
     elif action == "potion":
         potions = state["player"].get("potions", [])
         potion_types = {potion.get("id") for potion in potions if potion.get("id")}
@@ -641,6 +650,36 @@ async def potion_action(callback: CallbackQuery) -> None:
     if potion_id:
         state["phase"] = "battle"
         player_use_potion_by_id(state, potion_id)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+
+    await callback.answer("Неверное действие.", show_alert=True)
+
+@router.callback_query(F.data.startswith("run_tasks:"))
+async def run_tasks_action(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        active = await db.get_active_tutorial(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
+        return
+
+    run_id, state = active
+    if state.get("phase") != "run_tasks":
+        await callback.answer("Сейчас не испытания.", show_alert=True)
+        await _send_state(callback, state, run_id)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    if action == "back":
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
         await db.update_run(run_id, state)
         await callback.answer()
         await _send_state(callback, state, run_id)

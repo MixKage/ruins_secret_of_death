@@ -58,7 +58,7 @@ from .items import (
     _potion_stats,
     count_potions,
 )
-from .run_tasks import build_run_tasks, run_tasks_lines
+from .run_tasks import build_run_tasks, run_tasks_lines, run_tasks_summary
 from .tutorial import (
     TUTORIAL_DEFAULT_CONFIG,
     TUTORIAL_SCENE_NAME,
@@ -2093,10 +2093,6 @@ def render_state(state: Dict) -> str:
         status_notes.append("Приглушение уклонения (50+ этаж)")
     if status_notes:
         lines.append(f"<b>Состояние:</b> <i>{' / '.join(status_notes)}</i>")
-    task_lines = run_tasks_lines(state)
-    if task_lines:
-        lines.append("<b>Испытания руин:</b>")
-        lines.extend(task_lines)
     lines.extend([
         f"<b>Оружие:</b> <b>{weapon['name']}</b> (урон {weapon['min_dmg']}-{weapon['max_dmg']})",
         f"<b>Зелий:</b> {len(player.get('potions', []))} | <b>Свитков:</b> {len(player.get('scrolls', []))}",
@@ -2243,6 +2239,17 @@ def render_state(state: Dict) -> str:
             lines.append("<i>Выберите свиток для использования.</i>")
         else:
             lines.append("<i>Свитков нет.</i>")
+    elif state["phase"] == "run_tasks":
+        lines.append("<b>Испытания руин:</b>")
+        completed, total, _xp = run_tasks_summary(state)
+        lines.append(f"<b>Прогресс:</b> {completed}/{total}")
+        lines.append("<b>Награда:</b> +20 XP за задачу")
+        lines.append("")
+        task_lines = run_tasks_lines(state)
+        if task_lines:
+            lines.extend(task_lines)
+        else:
+            lines.append("<i>Испытания недоступны.</i>")
     elif state["phase"] == "dead":
         lines.append("<b>Вы погибли.</b>")
 
@@ -2256,12 +2263,18 @@ def render_state(state: Dict) -> str:
             hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
             total_expected += hit_damage * hit_chance
             total_max += hit_damage
-        expected_display = max(1, int(round(total_expected)))
         lines.append("")
-        lines.append(
-            f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
-            f"урон врагов (ожид./макс.): {expected_display}/{total_max}"
-        )
+        if len(enemies) == 1:
+            lines.append(
+                f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
+                f"урон врага: {total_max}"
+            )
+        else:
+            expected_display = max(1, int(round(total_expected)))
+            lines.append(
+                f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
+                f"урон врагов (ожид./макс.): {expected_display}/{total_max}"
+            )
 
     log_lines = []
     if state.get("log"):
