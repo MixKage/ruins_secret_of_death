@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from bot import db
+from bot.game.run_tasks import run_tasks_xp
 
 
 @dataclass(frozen=True)
@@ -196,7 +197,7 @@ async def record_run_progress(user_id: int, state: Dict, died: bool | None = Non
     treasure_xp = int(state.get("treasure_xp", 0))
     if treasure_xp <= 0:
         treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
-    bonus_xp = treasure_xp
+    bonus_xp = treasure_xp + run_tasks_xp(state)
     state_with_bonus = dict(state)
     if bonus_xp > 0:
         state_with_bonus["xp_bonus"] = bonus_xp

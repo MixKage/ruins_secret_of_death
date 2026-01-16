@@ -30,6 +30,7 @@ from bot.game.logic import (
     TREASURE_REWARD_XP,
     LATE_BOSS_NAME_FALLBACK,
 )
+from bot.game.run_tasks import run_tasks_summary, run_tasks_xp
 from bot.keyboards import (
     battle_kb,
     boss_artifact_kb,
@@ -124,7 +125,8 @@ def _run_xp_gain(state: dict) -> int:
     if treasure_xp <= 0:
         treasure_xp = int(state.get("treasures_found", 0)) * TREASURE_REWARD_XP
     floor = int(state.get("floor", 0))
-    return max(0, floor + treasure_xp)
+    task_xp = run_tasks_xp(state)
+    return max(0, floor + treasure_xp + task_xp)
 
 
 async def _send_story_chapter(bot, chat_id: int, chapter: int, max_chapter: int) -> None:
@@ -209,6 +211,7 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
     if treasure_xp <= 0:
         treasure_xp = int(treasures_found) * TREASURE_REWARD_XP
     bonus_xp = treasure_xp
+    tasks_completed, tasks_total, task_xp = run_tasks_summary(state)
     hp_max = int(player.get("hp_max", 0))
     ap_max = int(player.get("ap_max", 0))
     armor = int(round(player.get("armor", 0)))
@@ -233,6 +236,11 @@ def _format_run_summary(state: dict, rank: int | None) -> str:
             f"Сила +{power} | Удача {luck}%"
         ),
     ]
+    if tasks_total > 0:
+        lines.insert(
+            8,
+            f"<b>Испытания руин:</b> {tasks_completed}/{tasks_total} (+{task_xp} XP)",
+        )
     if rank is not None and rank <= 10:
         lines.append(f"<b>Вы в топ-10:</b> место {rank}")
     return "\n".join(lines)

@@ -201,6 +201,7 @@ def rules_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="Магия", callback_data="rules:magic")
     builder.button(text="Персонажи", callback_data="rules:characters")
     builder.button(text="Улучшения", callback_data="rules:upgrades")
+    builder.button(text="Испытания", callback_data="rules:run_tasks")
     builder.button(text="Баланс", callback_data="rules:balance")
     builder.button(text="Назад", callback_data="menu:main")
     builder.adjust(1)

@@ -151,6 +151,18 @@ def _format_upgrades() -> str:
     return "\n".join(lines)
 
 
+def _format_run_tasks() -> str:
+    return "\n".join(
+        [
+            "<b>Испытания руин</b>",
+            "Набор испытаний обновляется каждые <b>12 часов</b> (UTC).",
+            "Испытания действуют <b>только на один забег</b> и фиксируются при старте.",
+            "В каждом забеге — <b>3 задачи</b>: две боевые и одна цель по прогрессу.",
+            "За выполнение каждой задачи дается <b>+20 XP</b>.",
+        ]
+    )
+
+
 def _format_balance() -> str:
     lines = [
         "<b>Баланс и прогресс</b>",
@@ -228,6 +240,12 @@ async def rules_characters_callback(callback: CallbackQuery) -> None:
 async def rules_upgrades_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     await edit_or_send(callback, _format_upgrades(), reply_markup=rules_back_kb())
+
+
+@router.callback_query(F.data == "rules:run_tasks")
+async def rules_run_tasks_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await edit_or_send(callback, _format_run_tasks(), reply_markup=rules_back_kb())
 
 
 @router.callback_query(F.data == "rules:balance")

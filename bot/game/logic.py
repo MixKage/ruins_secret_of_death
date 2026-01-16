@@ -58,6 +58,7 @@ from .items import (
     _potion_stats,
     count_potions,
 )
+from .run_tasks import build_run_tasks, run_tasks_lines
 from .tutorial import (
     TUTORIAL_DEFAULT_CONFIG,
     TUTORIAL_SCENE_NAME,
@@ -847,6 +848,7 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "berserk_second_wind_used": False,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
+        "run_tasks": build_run_tasks(),
         "player": player,
         "enemies": generate_enemy_group(1, player),
         "rewards": [],
@@ -2091,6 +2093,10 @@ def render_state(state: Dict) -> str:
         status_notes.append("Приглушение уклонения (50+ этаж)")
     if status_notes:
         lines.append(f"<b>Состояние:</b> <i>{' / '.join(status_notes)}</i>")
+    task_lines = run_tasks_lines(state)
+    if task_lines:
+        lines.append("<b>Испытания руин:</b>")
+        lines.extend(task_lines)
     lines.extend([
         f"<b>Оружие:</b> <b>{weapon['name']}</b> (урон {weapon['min_dmg']}-{weapon['max_dmg']})",
         f"<b>Зелий:</b> {len(player.get('potions', []))} | <b>Свитков:</b> {len(player.get('scrolls', []))}",
