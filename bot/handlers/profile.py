@@ -4,7 +4,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 from bot import db
-from bot.handlers.helpers import get_user_row
+from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.game.characters import CHARACTERS, DEFAULT_CHARACTER_ID, get_character
 from bot.keyboards import main_menu_kb, profile_kb
 from bot.progress import BADGES, ensure_current_season, progress_bar, season_label, xp_to_level
@@ -124,21 +124,27 @@ async def profile_callback(callback: CallbackQuery) -> None:
     hero_runs = total_stats.get("hero_runs", {}) or {}
     star_summary = await db.get_star_purchase_summary(user_id)
     unlocked_ids = await db.get_unlocked_heroes(user_id)
+    is_admin = is_admin_user(callback.from_user)
 
     username = profile.get("username") or "Без имени"
     created_at = _format_date(profile.get("created_at"))
     xp = int(profile.get("xp", 0))
     level, xp_current, xp_needed = xp_to_level(xp)
     bar = progress_bar(xp_current, xp_needed)
-    unlocked_set = {DEFAULT_CHARACTER_ID}
-    unlocked_set.update(unlocked_ids)
-    unlocked_extra = max(0, len(unlocked_set) - 1)
-    total_unlockable = max(0, len(CHARACTERS) - 1)
-    slots = min(total_unlockable, level // 5)
-    available_unlocks = max(0, slots - unlocked_extra)
-    next_required_level = None
-    if unlocked_extra < total_unlockable:
-        next_required_level = max(5, (unlocked_extra + 1) * 5)
+    if is_admin:
+        unlocked_set = set(CHARACTERS.keys())
+        available_unlocks = 0
+        next_required_level = None
+    else:
+        unlocked_set = {DEFAULT_CHARACTER_ID}
+        unlocked_set.update(unlocked_ids)
+        unlocked_extra = max(0, len(unlocked_set) - 1)
+        total_unlockable = max(0, len(CHARACTERS) - 1)
+        slots = min(total_unlockable, level // 5)
+        available_unlocks = max(0, slots - unlocked_extra)
+        next_required_level = None
+        if unlocked_extra < total_unlockable:
+            next_required_level = max(5, (unlocked_extra + 1) * 5)
 
     seasonal_current, seasonal_history, permanent = _format_badges(
         badges,

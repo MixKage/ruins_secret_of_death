@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.game.characters import CHARACTERS, DEFAULT_CHARACTER_ID, get_character
-from bot.handlers.helpers import get_user_row
+from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.keyboards import hero_detail_kb, heroes_menu_kb
 from bot.progress import xp_to_level
 from bot.utils.telegram import edit_or_send
@@ -17,7 +17,15 @@ router = Router()
 UNLOCK_STEP = 5
 
 
-def _unlock_state(level: int, unlocked_ids: list[str]) -> Tuple[set[str], int, int | None, int]:
+def _unlock_state(
+    level: int,
+    unlocked_ids: list[str],
+    is_admin: bool = False,
+) -> Tuple[set[str], int, int | None, int]:
+    if is_admin:
+        unlocked_set = set(CHARACTERS.keys())
+        total_unlockable = max(0, len(CHARACTERS) - 1)
+        return unlocked_set, 0, None, total_unlockable
     unlocked_set = set(unlocked_ids or [])
     unlocked_set.add(DEFAULT_CHARACTER_ID)
     total_unlockable = max(0, len(CHARACTERS) - 1)
@@ -34,7 +42,12 @@ async def show_heroes_menu(callback: CallbackQuery, user_id: int, source: str = 
     profile = await db.get_user_profile(user_id) or {}
     level, _current, _need = xp_to_level(int(profile.get("xp", 0)))
     unlocked_ids = await db.get_unlocked_heroes(user_id)
-    unlocked_set, available, required_level, total_unlockable = _unlock_state(level, unlocked_ids)
+    is_admin = is_admin_user(callback.from_user)
+    unlocked_set, available, required_level, total_unlockable = _unlock_state(
+        level,
+        unlocked_ids,
+        is_admin=is_admin,
+    )
 
     lines = [
         "<b>Выберите героя</b>",
@@ -62,7 +75,12 @@ async def _show_hero_detail(callback: CallbackQuery, user_id: int, hero_id: str,
     profile = await db.get_user_profile(user_id) or {}
     level, _current, _need = xp_to_level(int(profile.get("xp", 0)))
     unlocked_ids = await db.get_unlocked_heroes(user_id)
-    unlocked_set, available, required_level, _total_unlockable = _unlock_state(level, unlocked_ids)
+    is_admin = is_admin_user(callback.from_user)
+    unlocked_set, available, required_level, _total_unlockable = _unlock_state(
+        level,
+        unlocked_ids,
+        is_admin=is_admin,
+    )
     is_unlocked = hero_id in unlocked_set
 
     lines = [f"<b>{character.get('name', 'Герой')}</b>", ""]
@@ -125,6 +143,10 @@ async def hero_unlock_callback(callback: CallbackQuery) -> None:
     if hero_id not in CHARACTERS:
         await callback.answer("Герой недоступен.", show_alert=True)
         await show_heroes_menu(callback, user_row[0], source=source)
+        return
+    if is_admin_user(callback.from_user):
+        await callback.answer("Администратору доступны все герои.")
+        await _show_hero_detail(callback, user_row[0], hero_id, source)
         return
     if hero_id == DEFAULT_CHARACTER_ID:
         await callback.answer("Рыцарь уже открыт.", show_alert=True)

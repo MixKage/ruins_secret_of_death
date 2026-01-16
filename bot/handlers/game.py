@@ -378,10 +378,11 @@ async def select_character(callback: CallbackQuery) -> None:
         await _show_character_select(callback, user_row[0])
         return
     unlocked_ids = await db.get_unlocked_heroes(user_row[0])
-    if character_id not in unlocked_ids and character_id != DEFAULT_CHARACTER_ID:
-        await callback.answer("Герой пока не открыт.", show_alert=True)
-        await _show_character_select(callback, user_row[0])
-        return
+    if not is_admin_user(callback.from_user):
+        if character_id not in unlocked_ids and character_id != DEFAULT_CHARACTER_ID:
+            await callback.answer("Герой пока не открыт.", show_alert=True)
+            await _show_character_select(callback, user_row[0])
+            return
     active = await db.get_active_run(user_row[0])
     if active:
         await callback.answer("У вас уже есть активный забег.", show_alert=True)
