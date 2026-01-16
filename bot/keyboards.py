@@ -213,6 +213,13 @@ def rules_back_kb() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+def profile_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Stars / Уровни", callback_data="profile:stars")
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def event_kb(options: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for option in options:

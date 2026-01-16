@@ -21,6 +21,7 @@ from bot.handlers import (
     share_router,
     start_router,
     stats_router,
+    stars_router,
     story_router,
 )
 
@@ -41,6 +42,7 @@ async def main() -> None:
         dispatcher.include_router(share_router)
         dispatcher.include_router(stats_router)
         dispatcher.include_router(profile_router)
+        dispatcher.include_router(stars_router)
         dispatcher.include_router(story_router)
         logger.info("Starting bot polling")
         await dispatcher.start_polling(bot)

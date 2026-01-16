@@ -165,6 +165,18 @@ async def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS star_purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                telegram_payment_charge_id TEXT UNIQUE NOT NULL,
+                provider_payment_charge_id TEXT,
+                levels INTEGER NOT NULL,
+                stars INTEGER NOT NULL,
+                xp_added INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS season_history (
                 season_id INTEGER PRIMARY KEY,
                 season_number INTEGER NOT NULL,
@@ -506,6 +518,88 @@ async def add_user_xp(user_id: int, amount: int) -> None:
             (amount, user_id),
         )
         await db.commit()
+
+
+async def add_season_xp(user_id: int, season_id: int, amount: int) -> None:
+    if amount <= 0:
+        return
+    async with _connect() as db:
+        await _execute(
+            db,
+            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+            (user_id, season_id),
+        )
+        await _execute(
+            db,
+            "UPDATE user_season_stats "
+            "SET xp_gained = COALESCE(xp_gained, 0) + ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE user_id = ? AND season_id = ?",
+            (amount, user_id, season_id),
+        )
+        await db.commit()
+
+
+async def has_star_purchase(telegram_payment_charge_id: str) -> bool:
+    if not telegram_payment_charge_id:
+        return False
+    async with _connect() as db:
+        cursor = await _execute(
+            db,
+            "SELECT 1 FROM star_purchases WHERE telegram_payment_charge_id = ?",
+            (telegram_payment_charge_id,),
+        )
+        row = await cursor.fetchone()
+        return bool(row)
+
+
+async def record_star_purchase(
+    user_id: int,
+    telegram_payment_charge_id: str,
+    provider_payment_charge_id: str | None,
+    levels: int,
+    stars: int,
+    xp_added: int,
+) -> None:
+    if not telegram_payment_charge_id:
+        return
+    async with _connect() as db:
+        await _execute(
+            db,
+            "INSERT OR IGNORE INTO star_purchases "
+            "(user_id, telegram_payment_charge_id, provider_payment_charge_id, levels, stars, xp_added) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                telegram_payment_charge_id,
+                provider_payment_charge_id,
+                levels,
+                stars,
+                xp_added,
+            ),
+        )
+        await db.commit()
+
+
+async def get_star_purchase_summary(user_id: int) -> List[Dict[str, int]]:
+    async with _connect() as db:
+        cursor = await _execute(
+            db,
+            "SELECT levels, COUNT(*), COALESCE(SUM(stars), 0), COALESCE(SUM(xp_added), 0) "
+            "FROM star_purchases WHERE user_id = ? GROUP BY levels ORDER BY levels ASC",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        summary = []
+        for levels, count, stars, xp_added in rows:
+            summary.append(
+                {
+                    "levels": int(levels),
+                    "count": int(count),
+                    "stars": int(stars),
+                    "xp_added": int(xp_added),
+                }
+            )
+        return summary
 
 
 async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:

@@ -77,6 +77,23 @@ def xp_to_level(xp: int) -> Tuple[int, int, int]:
         level += 1
 
 
+def xp_for_level_increase(current_xp: int, levels: int) -> int:
+    if levels <= 0:
+        return 0
+    level, current, need = xp_to_level(current_xp)
+    total = 0
+    remaining = levels
+    progress = current
+    threshold = need
+    while remaining > 0:
+        total += max(0, threshold - progress)
+        remaining -= 1
+        level += 1
+        progress = 0
+        threshold = LEVEL_BASE_XP + LEVEL_STEP_XP * (level - 1)
+    return total
+
+
 def progress_bar(current: int, total: int) -> str:
     if total <= 0:
         return "▮" * PROGRESS_BAR_WIDTH

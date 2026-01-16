@@ -4,9 +4,9 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 from bot import db
-from bot.handlers.helpers import get_user_row, is_admin_user
+from bot.handlers.helpers import get_user_row
 from bot.game.characters import get_character
-from bot.keyboards import main_menu_kb
+from bot.keyboards import profile_kb
 from bot.progress import BADGES, ensure_current_season, progress_bar, season_label, xp_to_level
 from bot.utils.telegram import edit_or_send
 
@@ -122,6 +122,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
     total_kills = sum((total_stats.get("kills") or {}).values())
     season_kills = sum((season_stats.get("kills") or {}).values())
     hero_runs = total_stats.get("hero_runs", {}) or {}
+    star_summary = await db.get_star_purchase_summary(user_id)
 
     username = profile.get("username") or "Без имени"
     created_at = _format_date(profile.get("created_at"))
@@ -164,6 +165,15 @@ async def profile_callback(callback: CallbackQuery) -> None:
         for hero_id, count in sorted_runs:
             hero_name = get_character(hero_id).get("name", hero_id)
             lines.append(f"- {hero_name}: {count}")
+    if star_summary:
+        lines.append("")
+        lines.append("<b>Stars:</b>")
+        for entry in star_summary:
+            levels = int(entry.get("levels", 0))
+            count = int(entry.get("count", 0))
+            stars = int(entry.get("stars", 0))
+            xp_added = int(entry.get("xp_added", 0))
+            lines.append(f"- +{levels} ур.: {count} (⭐{stars}) | XP +{xp_added}")
 
     lines.append("")
     lines.append("<b>Претендуемые награды сезона:</b>")
@@ -194,7 +204,5 @@ async def profile_callback(callback: CallbackQuery) -> None:
     else:
         lines.append("<i>Пока нет.</i>")
 
-    has_active = bool(await db.get_active_run(user_id))
-    is_admin = is_admin_user(callback.from_user)
     await callback.answer()
-    await edit_or_send(callback, "\n".join(lines), reply_markup=main_menu_kb(has_active_run=has_active, is_admin=is_admin))
+    await edit_or_send(callback, "\n".join(lines), reply_markup=profile_kb())
