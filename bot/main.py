@@ -15,6 +15,7 @@ from bot.handlers import (
     admin_router,
     broadcast_router,
     game_router,
+    heroes_router,
     leaderboard_router,
     profile_router,
     rules_router,
@@ -37,6 +38,7 @@ async def main() -> None:
         dispatcher.include_router(admin_router)
         dispatcher.include_router(broadcast_router)
         dispatcher.include_router(game_router)
+        dispatcher.include_router(heroes_router)
         dispatcher.include_router(leaderboard_router)
         dispatcher.include_router(rules_router)
         dispatcher.include_router(share_router)

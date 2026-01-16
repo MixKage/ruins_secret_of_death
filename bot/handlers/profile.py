@@ -5,8 +5,8 @@ from aiogram.types import CallbackQuery
 
 from bot import db
 from bot.handlers.helpers import get_user_row
-from bot.game.characters import get_character
-from bot.keyboards import profile_kb
+from bot.game.characters import CHARACTERS, DEFAULT_CHARACTER_ID, get_character
+from bot.keyboards import main_menu_kb, profile_kb
 from bot.progress import BADGES, ensure_current_season, progress_bar, season_label, xp_to_level
 from bot.utils.telegram import edit_or_send
 
@@ -123,12 +123,22 @@ async def profile_callback(callback: CallbackQuery) -> None:
     season_kills = sum((season_stats.get("kills") or {}).values())
     hero_runs = total_stats.get("hero_runs", {}) or {}
     star_summary = await db.get_star_purchase_summary(user_id)
+    unlocked_ids = await db.get_unlocked_heroes(user_id)
 
     username = profile.get("username") or "Без имени"
     created_at = _format_date(profile.get("created_at"))
     xp = int(profile.get("xp", 0))
     level, xp_current, xp_needed = xp_to_level(xp)
     bar = progress_bar(xp_current, xp_needed)
+    unlocked_set = {DEFAULT_CHARACTER_ID}
+    unlocked_set.update(unlocked_ids)
+    unlocked_extra = max(0, len(unlocked_set) - 1)
+    total_unlockable = max(0, len(CHARACTERS) - 1)
+    slots = min(total_unlockable, level // 5)
+    available_unlocks = max(0, slots - unlocked_extra)
+    next_required_level = None
+    if unlocked_extra < total_unlockable:
+        next_required_level = max(5, (unlocked_extra + 1) * 5)
 
     seasonal_current, seasonal_history, permanent = _format_badges(
         badges,
@@ -147,6 +157,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
         "",
         f"<b>Опыт:</b> {xp_current}/{xp_needed} (ур. {level})",
         f"<b>Прогресс:</b> [{bar}]",
+        f"<b>Открытые герои:</b> {', '.join(get_character(hero_id).get('name', hero_id) for hero_id in sorted(unlocked_set))}",
         "",
         "<b>Статистика сезона:</b>",
         f"- Убийства: {season_kills}",
@@ -165,6 +176,12 @@ async def profile_callback(callback: CallbackQuery) -> None:
         for hero_id, count in sorted_runs:
             hero_name = get_character(hero_id).get("name", hero_id)
             lines.append(f"- {hero_name}: {count}")
+    if available_unlocks > 0:
+        lines.append("")
+        lines.append(f"<b>Доступно открытий:</b> {available_unlocks}")
+    elif next_required_level:
+        lines.append("")
+        lines.append(f"<b>Следующее открытие:</b> уровень {next_required_level}")
     if star_summary:
         lines.append("")
         lines.append("<b>Stars:</b>")
@@ -205,4 +222,4 @@ async def profile_callback(callback: CallbackQuery) -> None:
         lines.append("<i>Пока нет.</i>")
 
     await callback.answer()
-    await edit_or_send(callback, "\n".join(lines), reply_markup=profile_kb())
+    await edit_or_send(callback, "\n".join(lines), reply_markup=profile_kb(can_unlock=available_unlocks > 0))

@@ -3,6 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from bot import db
+from bot.game.characters import DEFAULT_CHARACTER_ID
 from bot.game.logic import (
     apply_reward,
     apply_event_choice,
@@ -31,10 +32,10 @@ from bot.game.logic import (
     LATE_BOSS_NAME_FALLBACK,
 )
 from bot.game.run_tasks import run_tasks_summary, run_tasks_xp
+from bot.handlers.heroes import show_heroes_menu
 from bot.keyboards import (
     battle_kb,
     boss_artifact_kb,
-    character_select_kb,
     event_kb,
     inventory_kb,
     potion_kb,
@@ -52,20 +53,6 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
 
-def _character_select_text() -> str:
-    lines = [
-        "<b>Выберите героя</b>",
-        "Выбор действует только на текущий забег.",
-        "",
-    ]
-    for character in CHARACTERS.values():
-        name = character.get("name", "Герой")
-        lines.append(f"<b>{name}</b>")
-        for desc in character.get("description", []):
-            lines.append(f"- {desc}")
-        lines.append("")
-    return "\n".join(lines).rstrip()
-
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
     if callback.message:
@@ -77,10 +64,8 @@ async def _show_main_menu(callback: CallbackQuery, text: str = "Главное �
             reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin),
         )
 
-async def _show_character_select(callback: CallbackQuery) -> None:
-    text = _character_select_text()
-    markup = character_select_kb(list(CHARACTERS.values()))
-    await edit_or_send(callback, text, reply_markup=markup)
+async def _show_character_select(callback: CallbackQuery, user_id: int) -> None:
+    await show_heroes_menu(callback, user_id, source="menu")
 
 async def _show_tutorial_failed(callback: CallbackQuery, state: dict) -> None:
     reason = state.get("tutorial_fail_reason")
@@ -371,7 +356,7 @@ async def start_new_run(callback: CallbackQuery) -> None:
         if callback.from_user:
             await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
     await callback.answer()
-    await _show_character_select(callback)
+    await _show_character_select(callback, user_id)
 
 @router.callback_query(F.data.startswith("hero:select:"))
 async def select_character(callback: CallbackQuery) -> None:
@@ -387,7 +372,12 @@ async def select_character(callback: CallbackQuery) -> None:
     character_id = callback.data.split(":")[-1]
     if character_id not in CHARACTERS:
         await callback.answer("Герой недоступен.", show_alert=True)
-        await _show_character_select(callback)
+        await _show_character_select(callback, user_row[0])
+        return
+    unlocked_ids = await db.get_unlocked_heroes(user_row[0])
+    if character_id not in unlocked_ids and character_id != DEFAULT_CHARACTER_ID:
+        await callback.answer("Герой пока не открыт.", show_alert=True)
+        await _show_character_select(callback, user_row[0])
         return
     active = await db.get_active_run(user_row[0])
     if active:

@@ -90,6 +90,7 @@ async def init_db() -> None:
                 max_floor INTEGER DEFAULT 0,
                 xp INTEGER DEFAULT 0,
                 tutorial_done INTEGER DEFAULT 0,
+                unlocked_heroes_json TEXT DEFAULT '["wanderer"]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -109,9 +110,9 @@ async def init_db() -> None:
                 user_id INTEGER PRIMARY KEY,
                 total_runs INTEGER DEFAULT 0,
                 deaths INTEGER DEFAULT 0,
-                deaths_by_floor TEXT DEFAULT "{}",
-                kills_json TEXT DEFAULT "{}",
-                hero_runs_json TEXT DEFAULT "{}",
+                deaths_by_floor TEXT DEFAULT '{}',
+                kills_json TEXT DEFAULT '{}',
+                hero_runs_json TEXT DEFAULT '{}',
                 treasures_found INTEGER DEFAULT 0,
                 chests_opened INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -142,11 +143,11 @@ async def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 season_id INTEGER NOT NULL,
                 max_floor INTEGER DEFAULT 0,
-                max_floor_character TEXT DEFAULT "wanderer",
+                max_floor_character TEXT DEFAULT 'wanderer',
                 total_runs INTEGER DEFAULT 0,
                 deaths INTEGER DEFAULT 0,
-                deaths_by_floor TEXT DEFAULT "{}",
-                kills_json TEXT DEFAULT "{}",
+                deaths_by_floor TEXT DEFAULT '{}',
+                kills_json TEXT DEFAULT '{}',
                 treasures_found INTEGER DEFAULT 0,
                 chests_opened INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -182,8 +183,8 @@ async def init_db() -> None:
                 season_number INTEGER NOT NULL,
                 season_key TEXT NOT NULL,
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                winners_json TEXT DEFAULT "{}",
-                summary_json TEXT DEFAULT "{}",
+                winners_json TEXT DEFAULT '{}',
+                summary_json TEXT DEFAULT '{}',
                 FOREIGN KEY(season_id) REFERENCES seasons(id)
             );
             """
@@ -210,6 +211,18 @@ async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
     if "tutorial_done" not in columns:
         await _execute(db, "ALTER TABLE users ADD COLUMN tutorial_done INTEGER DEFAULT 0")
         await db.commit()
+    if "unlocked_heroes_json" not in columns:
+        await _execute(
+            db,
+            "ALTER TABLE users ADD COLUMN unlocked_heroes_json TEXT DEFAULT '[\"wanderer\"]'",
+        )
+        await db.commit()
+    await _execute(
+        db,
+        "UPDATE users SET unlocked_heroes_json = '[\"wanderer\"]' "
+        "WHERE unlocked_heroes_json IS NULL OR unlocked_heroes_json = '' OR unlocked_heroes_json = '[]'",
+    )
+    await db.commit()
 
 
 async def _ensure_run_columns(db: aiosqlite.Connection) -> None:
@@ -226,7 +239,7 @@ async def _ensure_user_stats_columns(db: aiosqlite.Connection) -> None:
     if "hero_runs_json" not in columns:
         await _execute(
             db,
-            "ALTER TABLE user_stats ADD COLUMN hero_runs_json TEXT DEFAULT \"{}\"",
+            "ALTER TABLE user_stats ADD COLUMN hero_runs_json TEXT DEFAULT '{}'",
         )
         await db.commit()
     cursor = await _execute(
@@ -258,13 +271,13 @@ async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
     if "deaths_by_floor" not in columns:
         await _execute(
             db,
-            "ALTER TABLE user_season_stats ADD COLUMN deaths_by_floor TEXT DEFAULT \"{}\"",
+            "ALTER TABLE user_season_stats ADD COLUMN deaths_by_floor TEXT DEFAULT '{}'",
         )
         await db.commit()
     if "max_floor_character" not in columns:
         await _execute(
             db,
-            "ALTER TABLE user_season_stats ADD COLUMN max_floor_character TEXT DEFAULT \"wanderer\"",
+            "ALTER TABLE user_season_stats ADD COLUMN max_floor_character TEXT DEFAULT 'wanderer'",
         )
         await db.commit()
     await _execute(
@@ -507,6 +520,56 @@ async def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
             "xp": int(xp or 0),
             "created_at": created_at,
         }
+
+
+async def get_unlocked_heroes(user_id: int) -> List[str]:
+    async with _connect() as db:
+        cursor = await _execute(
+            db,
+            "SELECT unlocked_heroes_json FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return ["wanderer"]
+        raw = row[0] or ""
+        try:
+            heroes = json.loads(raw) if raw else []
+        except json.JSONDecodeError:
+            heroes = []
+        if not isinstance(heroes, list):
+            heroes = []
+        if "wanderer" not in heroes:
+            heroes.append("wanderer")
+        return heroes
+
+
+async def set_unlocked_heroes(user_id: int, heroes: List[str]) -> None:
+    unique = []
+    seen = set()
+    for hero_id in heroes:
+        if not hero_id or hero_id in seen:
+            continue
+        seen.add(hero_id)
+        unique.append(hero_id)
+    if "wanderer" not in seen:
+        unique.append("wanderer")
+    async with _connect() as db:
+        await _execute(
+            db,
+            "UPDATE users SET unlocked_heroes_json = ? WHERE id = ?",
+            (json.dumps(unique), user_id),
+        )
+        await db.commit()
+
+
+async def unlock_hero(user_id: int, hero_id: str) -> bool:
+    heroes = await get_unlocked_heroes(user_id)
+    if hero_id in heroes:
+        return False
+    heroes.append(hero_id)
+    await set_unlocked_heroes(user_id, heroes)
+    return True
 
 
 async def add_user_xp(user_id: int, amount: int) -> None:

@@ -213,9 +213,45 @@ def rules_back_kb() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-def profile_kb() -> InlineKeyboardMarkup:
+def profile_kb(can_unlock: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Stars / Уровни", callback_data="profile:stars")
+    if can_unlock:
+        builder.button(text="Открыть персонажа", callback_data="heroes:menu:profile")
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def heroes_menu_kb(characters: list, unlocked_ids: set, source: str = "menu") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for character in characters:
+        hero_id = character.get("id", "")
+        name = character.get("name", "Герой")
+        label = name if hero_id in unlocked_ids else f"{name} (закрыт)"
+        builder.button(text=label, callback_data=f"hero:info:{hero_id}:{source}")
+    if source == "profile":
+        builder.button(text="Назад", callback_data="menu:profile")
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def hero_detail_kb(
+    hero_id: str,
+    is_unlocked: bool,
+    can_unlock: bool,
+    required_level: int | None,
+    source: str = "menu",
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if is_unlocked:
+        builder.button(text="Начать забег", callback_data=f"hero:select:{hero_id}")
+    elif can_unlock:
+        builder.button(text="Открыть персонажа", callback_data=f"hero:unlock:{hero_id}:{source}")
+    else:
+        level = int(required_level or 0)
+        label = f"Требуется уровень {level}" if level > 0 else "Требуется уровень"
+        builder.button(text=label, callback_data="hero:locked")
+    builder.button(text="Назад", callback_data=f"heroes:menu:{source}")
     builder.button(text="Меню", callback_data="menu:main")
     builder.adjust(1)
     return builder.as_markup()
