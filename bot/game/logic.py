@@ -211,7 +211,7 @@ def _apply_rune_guard_shield(state: Dict) -> None:
         return
     player["armor"] = float(player.get("armor", 0.0)) + RUNE_GUARD_SHIELD_BONUS
     state["rune_guard_shield_active"] = True
-    _append_log(state, "Рунический заслон: броня +2 до конца хода врагов.")
+    _append_log(state, "Щит Рун: броня +2 до конца хода врагов.")
 
 def _clear_rune_guard_shield(state: Dict) -> None:
     if not state.get("rune_guard_shield_active"):
@@ -231,7 +231,7 @@ def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
         return
     if damage > hp_max * RUNE_GUARD_RETRIBUTION_THRESHOLD:
         state["rune_guard_retribution_ready"] = True
-        _append_log(state, "Расплата камня: следующий удар игнорирует 30% брони.")
+        _append_log(state, "Каменный Ответ: следующий удар игнорирует 30% брони.")
 
 
 def _apply_executioner_last_breath_penalty(state: Dict) -> None:
@@ -1175,7 +1175,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
 
     if free_attack:
         state["desperate_charge_used"] = True
-        _append_log(state, "Отчаянный рывок: атака без затрат ОД.")
+        _append_log(state, "Рывок Чести: атака без затрат ОД.")
     else:
         player["ap"] -= 1
     weapon = player["weapon"]
@@ -1267,7 +1267,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             _append_log(state, f"{target['name']} истекает кровью.")
         if retribution_ready and armor_pierce_bonus > 0:
             state["rune_guard_retribution_ready"] = False
-            _append_log(state, "Расплата камня усиливает удар — броня частично игнорирована.")
+            _append_log(state, "Каменный Ответ усиливает удар — броня частично игнорирована.")
         _apply_stone_skin(state, target)
         target_killed = target["hp"] <= 0
         if target_killed and state.get("duel_turns_left") and _duel_target(state) is None:
@@ -2076,15 +2076,15 @@ def render_state(state: Dict) -> str:
         rage_name, rage_bonus = rage_state
         status_notes.append(f"{rage_name} — урон +{int(round(rage_bonus * 100))}%")
     if is_rune_guard and desperate_charge_active:
-        status_notes.append("Отчаянный рывок — 1-я атака 0 ОД, точность +25%")
+        status_notes.append("Рывок Чести — 1-я атака 0 ОД, точность +25%")
     if last_breath_active:
         status_notes.append("На последнем издыхании — точность 100%")
     if state.get("rune_guard_shield_active"):
-        status_notes.append("Рунический заслон — броня +2")
+        status_notes.append("Щит Рун — броня +2")
     if state.get("rune_guard_retribution_ready"):
-        status_notes.append("Расплата камня — бронепробой +30%")
+        status_notes.append("Каменный Ответ — бронепробой +30%")
     if state.get("ap_bonus"):
-        status_notes.append("Ровное дыхание — ОД +1")
+        status_notes.append("Стойкая Воля — ОД +1")
     if _is_berserk(state) and not state.get("berserk_second_wind_used"):
         status_notes.append("Неистовая живучесть — готово")
     if state.get("cursed_ap_ratio"):
