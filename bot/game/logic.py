@@ -1008,6 +1008,8 @@ def generate_enemy_group(floor: int, player: Dict, ap_max_override: int | None =
             min_group = 3
         elif player_ap_max >= 3:
             min_group = 2
+    if floor >= 11 and _is_duelist(player):
+        min_group += 1
     if floor > 20:
         min_group += (floor - 20) // 10
     if max_group < min_group:
@@ -1377,7 +1379,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             state["duel_turns_left"] = 0
             state["duel_target_idx"] = None
 
-        if weapon["splash_ratio"] > 0:
+        if weapon["splash_ratio"] > 0 and not _is_duelist(state):
             splash_targets = [enemy for enemy in state["enemies"] if enemy is not target and enemy["hp"] > 0]
             if splash_targets:
                 splash_damage = max(1, int(damage * weapon["splash_ratio"]))
@@ -2455,17 +2457,21 @@ def render_state(state: Dict) -> str:
         total_max = 0
         player_evasion = player.get("evasion", 0.0)
         floor = state.get("floor")
-        for enemy in enemies:
-            hit_damage = _enemy_damage_to_player(enemy, player, floor)
-            hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
-            total_expected += hit_damage * hit_chance
-            total_max += hit_damage
-        lines.append("")
-        if len(enemies) == 1:
-            lines.append(
-                f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
-                f"урон врага: {total_max}"
-            )
+    for enemy in enemies:
+        hit_damage = _enemy_damage_to_player(enemy, player, floor)
+        hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
+        total_expected += hit_damage * hit_chance
+        total_max += hit_damage
+    lines.append("")
+    parry_multiplier = 1.0
+    if len(enemies) == 1 and _is_duelist(state) and not state.get("duelist_parry_used"):
+        parry_multiplier = max(0.0, 1.0 - DUELIST_PARRY_REDUCTION)
+    single_max_display = max(1, int(round(total_max * parry_multiplier)))
+    if len(enemies) == 1:
+        lines.append(
+            f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
+                f"урон врага: {single_max_display}"
+        )
         else:
             expected_display = max(1, int(round(total_expected)))
             lines.append(
