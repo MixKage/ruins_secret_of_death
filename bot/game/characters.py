@@ -86,6 +86,21 @@ POTION_NAMING = {
             "potion_strong": ("сильная", "сильных"),
         },
     },
+    BERSERK_ID: {
+        "noun_forms": ("кусок мяса", "куска мяса", "кусков мяса"),
+        "noun_genitive_singular": "куска мяса",
+        "noun_accusative": "кусок мяса",
+        "button_noun": "кусок",
+        "action_label": "Кусок",
+        "menu_title": "Выбор куска мяса",
+        "received_verb": "Получено",
+        "no_match_adjective": "подходящего",
+        "adjectives": {
+            "potion_small": ("младший", "младших"),
+            "potion_medium": ("средний", "средних"),
+            "potion_strong": ("большой", "больших"),
+        },
+    },
 }
 
 CHARACTERS = {
