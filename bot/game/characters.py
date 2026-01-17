@@ -27,6 +27,7 @@ BERSERK_RAGE_TIERS = [
     ("Ярость III", 0.2, 0.45),
     ("Ярость IV", 0.0, 0.65),
 ]
+BERSERK_MEAT_ACCURACY_BONUS = 0.30
 ASSASSIN_HP_PENALTY = 4
 ASSASSIN_ARMOR_PENALTY = 1.0
 ASSASSIN_EVASION_BONUS = 0.10
@@ -96,7 +97,7 @@ POTION_NAMING = {
         "received_verb": "Получено",
         "no_match_adjective": "подходящего",
         "adjectives": {
-            "potion_small": ("младший", "младших"),
+            "potion_small": ("малый", "малых"),
             "potion_medium": ("средний", "средних"),
             "potion_strong": ("большой", "больших"),
         },
@@ -135,6 +136,7 @@ CHARACTERS = {
             "Кровавая ярость IV (HP 1-19%): урон +65%.",
             "Кровавая добыча: первое убийство за ход восстанавливает 1 ОД.",
             "Неистовая живучесть: первый смертельный удар за игру отменяет смерть и полностью восстанавливает HP.",
+            "Сытая ярость: после каждого куска мяса точность +30% на 1 ход.",
         ],
     },
     ASSASSIN_ID: {

@@ -21,6 +21,7 @@ from .characters import (
     _assassin_shadow_active,
     _berserk_damage_bonus,
     _berserk_rage_state,
+    BERSERK_MEAT_ACCURACY_BONUS,
     _desperate_charge_accuracy_bonus,
     _duelist_blade_pierce_bonus,
     _duelist_duel_accuracy_bonus,
@@ -213,6 +214,8 @@ def _refresh_turn_ap(state: Dict) -> None:
         state["ap_bonus"] = 0
     player["ap"] = _effective_ap_max(state)
     _apply_executioner_last_breath_penalty(state)
+    if state.get("berserk_meat_turns", 0) > 0:
+        state["berserk_meat_turns"] = max(0, int(state.get("berserk_meat_turns", 0)) - 1)
 
 def _apply_rune_guard_shield(state: Dict) -> None:
     if not _is_rune_guard(state):
@@ -309,6 +312,13 @@ def _purge_executioner_strong_potions(state: Dict) -> None:
     potions = [potion for potion in player.get("potions", []) if potion.get("id") != "potion_strong"]
     if len(potions) != len(player.get("potions", [])):
         player["potions"] = potions
+
+
+def _trigger_berserk_meat_buff(state: Dict) -> None:
+    if not _is_berserk(state):
+        return
+    state["berserk_meat_turns"] = max(state.get("berserk_meat_turns", 0), 1)
+    _append_log(state, "Сытая ярость: точность +30% на 1 ход.")
 
 
 def _duel_target(state: Dict) -> Dict | None:
@@ -738,8 +748,8 @@ def generate_boss_artifacts(character_id: str | None = None) -> List[Dict]:
     if character_id:
         for option in options:
             if option.get("id") == "artifact_potions":
-                label = potion_label(character_id, "potion_medium", count=2)
-                option["effect"] = f"2 {label} + случайный свиток"
+                label = potion_label_with_count(character_id, "potion_medium", count=2)
+                option["effect"] = f"{label} + случайный свиток"
     return options
 
 def build_boss(player: Dict) -> Dict:
@@ -916,6 +926,7 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "duelist_blade_used": False,
         "duelist_parry_used": False,
         "berserk_second_wind_used": False,
+        "berserk_meat_turns": 0,
         "rune_guard_shield_active": False,
         "rune_guard_retribution_ready": False,
         "run_tasks": build_run_tasks(),
@@ -1259,11 +1270,6 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         for enemy in state.get("enemies", [])
         if enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
     ]
-    bleeding_before = [
-        enemy
-        for enemy in state.get("enemies", [])
-        if enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
-    ]
 
     shadow_evaded = False
     target_killed = False
@@ -1281,9 +1287,17 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     hunter_accuracy_bonus = _hunter_first_shot_bonus(state) if hunter_first_shot else 0.0
     duelist_accuracy_bonus = _duelist_duel_accuracy_bonus(state, duel_active)
     blade_bonus = _duelist_blade_pierce_bonus(state, state.get("duelist_blade_used", False))
+    berserk_meat_bonus = BERSERK_MEAT_ACCURACY_BONUS if state.get("berserk_meat_turns", 0) > 0 else 0.0
     if blade_bonus:
         state["duelist_blade_used"] = True
     has_hunter_mark = any(enemy.get("hunter_mark") for enemy in state.get("enemies", []))
+    base_accuracy = (
+        player["accuracy"]
+        + weapon["accuracy_bonus"]
+        + hunter_accuracy_bonus
+        + duelist_accuracy_bonus
+        + berserk_meat_bonus
+    )
     if _has_trait(target, ELITE_TRAIT_SHADOW) and not target.get("shadow_dodge_used"):
         target["shadow_dodge_used"] = True
         shadow_evaded = True
@@ -1294,20 +1308,13 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         elif is_rune_guard:
             accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
             hit = roll_hit(
-                player["accuracy"]
-                + weapon["accuracy_bonus"]
-                + accuracy_bonus
-                + hunter_accuracy_bonus
-                + duelist_accuracy_bonus,
+                base_accuracy + accuracy_bonus,
                 target["evasion"],
                 state.get("floor"),
             )
         else:
             hit = True if last_breath else roll_hit(
-                player["accuracy"]
-                + weapon["accuracy_bonus"]
-                + hunter_accuracy_bonus
-                + duelist_accuracy_bonus,
+                base_accuracy,
                 target["evasion"],
                 state.get("floor"),
             )
@@ -1414,6 +1421,7 @@ def player_use_potion(state: Dict) -> None:
     player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
     used_label = potion_use_label(state.get("character_id"))
     _append_log(state, f"Вы используете {used_label}: +{heal} HP, +{potion['ap_restore']} ОД.")
+    _trigger_berserk_meat_buff(state)
 
     check_battle_end(state)
 
@@ -1429,6 +1437,7 @@ def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
             player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
             used_label = potion_use_label(state.get("character_id"))
             _append_log(state, f"Вы используете {used_label}: +{heal} HP, +{potion['ap_restore']} ОД.")
+            _trigger_berserk_meat_buff(state)
             check_battle_end(state)
             return
     _append_log(state, potion_no_match_message(state.get("character_id")))
@@ -2267,6 +2276,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("Каменный Ответ — бронепробой +30%")
     if state.get("ap_bonus"):
         status_notes.append("Стойкая Воля — ОД +1")
+    if _is_berserk(state) and state.get("berserk_meat_turns", 0) > 0:
+        status_notes.append("Сытая ярость — точность +30%")
     if _is_berserk(state) and not state.get("berserk_second_wind_used"):
         status_notes.append("Неистовая живучесть — готово")
     if state.get("cursed_ap_ratio"):
