@@ -4,6 +4,7 @@ from typing import Optional
 
 import asyncio
 
+from aiogram.client.bot import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
@@ -81,3 +82,21 @@ async def edit_or_send(
             text,
             reply_markup=reply_markup,
         )
+
+
+_original_send_message = Bot.send_message
+
+
+async def _bot_send_message_with_retry(self: Bot, *args, **kwargs):
+    attempts = 0
+    while True:
+        try:
+            return await _original_send_message(self, *args, **kwargs)
+        except TelegramRetryAfter as exc:
+            if attempts >= 1:
+                raise
+            attempts += 1
+            await _notify_retry_delay(None, exc.retry_after)
+
+
+Bot.send_message = _bot_send_message_with_retry
