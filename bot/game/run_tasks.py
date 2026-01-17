@@ -5,8 +5,8 @@ import random
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-TASK_XP = 20
-TASK_WINDOW_SECONDS = 12 * 60 * 60
+TASK_XP = 10
+TASK_WINDOW_SECONDS = 30 * 60
 
 TASK_POOL: List[Dict] = [
     {
