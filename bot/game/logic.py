@@ -2457,21 +2457,21 @@ def render_state(state: Dict) -> str:
         total_max = 0
         player_evasion = player.get("evasion", 0.0)
         floor = state.get("floor")
-    for enemy in enemies:
-        hit_damage = _enemy_damage_to_player(enemy, player, floor)
-        hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
-        total_expected += hit_damage * hit_chance
-        total_max += hit_damage
-    lines.append("")
-    parry_multiplier = 1.0
-    if len(enemies) == 1 and _is_duelist(state) and not state.get("duelist_parry_used"):
-        parry_multiplier = max(0.0, 1.0 - DUELIST_PARRY_REDUCTION)
-    single_max_display = max(1, int(round(total_max * parry_multiplier)))
-    if len(enemies) == 1:
-        lines.append(
-            f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
+        for enemy in enemies:
+            hit_damage = _enemy_damage_to_player(enemy, player, floor)
+            hit_chance = _enemy_expected_hit_chance(enemy, player_evasion, floor)
+            total_expected += hit_damage * hit_chance
+            total_max += hit_damage
+        lines.append("")
+        parry_multiplier = 1.0
+        if len(enemies) == 1 and _is_duelist(state) and not state.get("duelist_parry_used"):
+            parry_multiplier = max(0.0, 1.0 - DUELIST_PARRY_REDUCTION)
+        single_max_display = max(1, int(round(total_max * parry_multiplier)))
+        if len(enemies) == 1:
+            lines.append(
+                f"<b>Сводка:</b> HP {player['hp']}/{player['hp_max']} | "
                 f"урон врага: {single_max_display}"
-        )
+            )
         else:
             expected_display = max(1, int(round(total_expected)))
             lines.append(

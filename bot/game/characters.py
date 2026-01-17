@@ -46,7 +46,7 @@ EXECUTIONER_ARMOR_BONUS = 1.0
 EXECUTIONER_EVASION_PENALTY = 0.05
 EXECUTIONER_BLEED_DAMAGE_BONUS = 0.25
 EXECUTIONER_BLEED_CHANCE_BONUS = 0.20
-DUELIST_ARMOR_BONUS = 1.0
+DUELIST_ARMOR_BONUS = 0.0
 DUELIST_EVASION_BONUS = 0.10
 DUELIST_ACCURACY_BONUS = 0.05
 DUELIST_DUEL_DAMAGE_BONUS = 0.25
@@ -54,7 +54,7 @@ DUELIST_DUEL_ACCURACY_BONUS = 0.15
 DUELIST_BLADE_PIERCE_BONUS = 0.25
 DUELIST_ZONE_CHARGES = 2
 DUELIST_ZONE_TURNS = 2
-DUELIST_PARRY_REDUCTION = 0.75
+DUELIST_PARRY_REDUCTION = 0.25
 DUELIST_PARRY_COUNTER_RATIO = 0.50
 POTION_NAMING = {
     DEFAULT_CHARACTER_ID: {
@@ -182,7 +182,7 @@ CHARACTERS = {
         "id": DUELIST_ID,
         "name": "Дуэлянт",
         "description": [
-            "HP без изменений, броня +1, уклонение +10%, точность +5%.",
+            "HP без изменений, броня без изменений, уклонение +10%, точность +5%.",
             "Дуэль: при 1 живом враге урон +25% и точность +15%.",
             "Парирование: первый успешный удар врага в фазу снижает урон на 60% и контратакует на 50% предотвращенного урона.",
             "Клинок чести: первая атака в ход игнорирует 25% брони цели.",
