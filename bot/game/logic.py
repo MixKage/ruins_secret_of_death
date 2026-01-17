@@ -747,7 +747,7 @@ def build_boss(player: Dict) -> Dict:
     scale = 1.0 + ap_bonus * 0.08 + potion_bonus * 0.04
     scale = _clamp(scale, 1.0, 1.4)
 
-    hp_max = max(80, int(player["hp_max"] * 2.2 * scale))
+    hp_max = max(80, int(player["hp_max"] * 2.2 * scale * 2))
     attack = max(12, int(player["hp_max"] * 0.35 * scale))
     armor = max(3.0, player.get("armor", 0) * 0.6 + 2.0 + ap_bonus * 0.2)
     accuracy = 0.78
