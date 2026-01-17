@@ -32,6 +32,7 @@ from .characters import (
     _has_steady_breath,
     _is_assassin,
     _is_berserk,
+    BERSERK_ID,
     _is_desperate_charge,
     _is_duelist,
     _is_executioner,
@@ -278,13 +279,6 @@ def _executioner_bleed_chance(state: Dict, weapon: Dict) -> float:
     if _is_executioner(state):
         base_chance = _clamp(base_chance + EXECUTIONER_BLEED_CHANCE_BONUS, 0.0, 1.0)
     return base_chance
-
-
-def _executioner_inquisition_effect(state: Dict, late_floor: bool) -> str:
-    count = 2 if late_floor else 1
-    if count == 1:
-        return potion_label(state.get("character_id"), "potion_medium", count=1, title=True)
-    return potion_label_with_count(state.get("character_id"), "potion_medium", count=count)
 
 
 def _fill_potions_executioner(player: Dict, ratio: float = 1.0) -> Dict[str, int]:
@@ -730,6 +724,45 @@ EVENT_OPTIONS = [
         "effect": "+2-3 к макс. HP + малое зелье",
     },
 ]
+
+ROOM_NAME_OVERRIDES = {
+    EXECUTIONER_ID: {"holy_spring": "Камера Дознания"},
+    BERSERK_ID: {"holy_spring": "Очаг ярости"},
+}
+
+ROOM_DEFAULT_NAMES = {option["id"]: option["name"] for option in EVENT_OPTIONS}
+
+
+def _room_name(character_id: str | None, room_id: str) -> str:
+    override = ROOM_NAME_OVERRIDES.get(resolve_character_id(character_id), {})
+    return override.get(room_id, ROOM_DEFAULT_NAMES.get(room_id, room_id))
+
+
+def _room_effect_description(character_id: str | None, room_id: str, late_floor: bool) -> str:
+    if room_id == "holy_spring":
+        if resolve_character_id(character_id) == EXECUTIONER_ID:
+            count = 2 if late_floor else 1
+            return potion_label_with_count(character_id, "potion_medium", count=count)
+        effect = "Полностью восстанавливает здоровье"
+        if late_floor:
+            small_label = potion_label(character_id, "potion_small")
+            effect += f" + {small_label}"
+        return effect
+    if room_id == "treasure_chest":
+        effect = "Шанс на награду +2 этажа или свиток магии + "
+        effect += potion_label(character_id, "potion_small")
+        if late_floor:
+            medium_label = potion_label(character_id, "potion_medium")
+            effect += f" и {medium_label}"
+        return effect
+    if room_id == "campfire":
+        effect = "+2-3 к макс. HP + "
+        effect += potion_label(character_id, "potion_small")
+        if late_floor:
+            medium_label = potion_label(character_id, "potion_medium")
+            effect += f" и {medium_label}"
+        return effect
+    return ""
 
 def is_boss_floor(floor: int) -> bool:
     return floor == BOSS_FLOOR
@@ -1710,17 +1743,12 @@ def check_battle_end(state: Dict) -> None:
 def generate_event_options() -> List[Dict]:
     return [copy.deepcopy(option) for option in EVENT_OPTIONS]
 
-def _event_options_for_floor(floor: int) -> List[Dict]:
+def _event_options_for_floor(floor: int, character_id: str | None = None) -> List[Dict]:
     options = generate_event_options()
-    if floor < CURSED_FLOOR_MIN_FLOOR:
-        return options
+    late_floor = floor >= CURSED_FLOOR_MIN_FLOOR
     for option in options:
-        if option.get("id") == "holy_spring":
-            option["effect"] = "Полностью восстанавливает здоровье + малое зелье"
-        elif option.get("id") == "treasure_chest":
-            option["effect"] = "Шанс на награду +2 этажа или свиток магии + малое и среднее зелье"
-        elif option.get("id") == "campfire":
-            option["effect"] = "+2-3 к макс. HP + малое и среднее зелье"
+        option["name"] = _room_name(character_id, option.get("id", ""))
+        option["effect"] = _room_effect_description(character_id, option.get("id", ""), late_floor)
     return options
 
 def _build_chest_reward(
@@ -1888,37 +1916,7 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
 def prepare_event(state: Dict) -> None:
     last_event_id = state.get("last_event_id")
     state["phase"] = "event"
-    options = _event_options_for_floor(state.get("floor", 1))
-    if _is_executioner(state):
-        late_floor = state.get("floor", 0) >= CURSED_FLOOR_MIN_FLOOR
-        for option in options:
-            if option.get("id") == "holy_spring":
-                option["name"] = "Камера Дознания"
-                option["effect"] = _executioner_inquisition_effect(state, late_floor)
-            elif option.get("id") == "treasure_chest":
-                if late_floor:
-                    option["effect"] = (
-                        "Шанс на награду +2 этажа или свиток магии + "
-                        f"{potion_label(state.get('character_id'), 'potion_small')} "
-                        f"и {potion_label(state.get('character_id'), 'potion_medium')}"
-                    )
-                else:
-                    option["effect"] = (
-                        "Шанс на награду +2 этажа или свиток магии + "
-                        f"{potion_label(state.get('character_id'), 'potion_small')}"
-                    )
-            elif option.get("id") == "campfire":
-                if late_floor:
-                    option["effect"] = (
-                        "+2-3 к макс. HP + "
-                        f"{potion_label(state.get('character_id'), 'potion_small')} "
-                        f"и {potion_label(state.get('character_id'), 'potion_medium')}"
-                    )
-                else:
-                    option["effect"] = (
-                        "+2-3 к макс. HP + "
-                        f"{potion_label(state.get('character_id'), 'potion_small')}"
-                    )
+    options = _event_options_for_floor(state.get("floor", 1), state.get("character_id"))
     if last_event_id in {"treasure_chest", "campfire"}:
         options = [option for option in options if option.get("id") != last_event_id]
     state["event_options"] = options
@@ -1953,16 +1951,17 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
             added, dropped = _grant_medium_potion(player, count=count)
             if added == 1:
                 label = potion_label(state.get("character_id"), "potion_medium")
-                _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
+                _append_log(state, f"{_room_name(state.get('character_id'), event_id)} приносит <b>{label}</b>.")
             elif added > 1:
                 label = potion_label_with_count(state.get("character_id"), "potion_medium", count=added)
-                _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
+                _append_log(state, f"{_room_name(state.get('character_id'), event_id)} приносит <b>{label}</b>.")
             if dropped:
                 noun = potion_noun_genitive_plural(state.get("character_id"))
                 _append_log(state, f"Нет места для {noun} — находка сгорает.")
         else:
             player["hp"] = player["hp_max"]
-            _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
+            room_name = _room_name(state.get("character_id"), event_id)
+            _append_log(state, f"{room_name} полностью <b>исцеляет</b> вас.")
             if late_floor:
                 added, dropped = _grant_small_potion(player)
                 if added:
