@@ -279,6 +279,13 @@ def potion_label(character_id: str | None, potion_id: str, count: int = 1, title
     return label
 
 
+def potion_label_with_count(character_id: str | None, potion_id: str, count: int) -> str:
+    label = potion_label(character_id, potion_id, count=count)
+    if count > 1:
+        label = f"{count} {label}"
+    return label
+
+
 def potion_button_label(character_id: str | None, potion_id: str, title: bool = False) -> str:
     terms = _potion_terms(character_id)
     adjective = terms.get("adjectives", {}).get(potion_id, ("", ""))[0]

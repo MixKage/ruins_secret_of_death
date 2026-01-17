@@ -43,6 +43,7 @@ from .characters import (
     is_desperate_charge_available,
     potion_full_name,
     potion_label,
+    potion_label_with_count,
     potion_menu_title,
     potion_no_match_message,
     potion_noun_genitive_plural,
@@ -278,7 +279,9 @@ def _executioner_bleed_chance(state: Dict, weapon: Dict) -> float:
 
 def _executioner_inquisition_effect(state: Dict, late_floor: bool) -> str:
     count = 2 if late_floor else 1
-    return potion_label(state.get("character_id"), "potion_medium", count=count, title=count == 1)
+    if count == 1:
+        return potion_label(state.get("character_id"), "potion_medium", count=1, title=True)
+    return potion_label_with_count(state.get("character_id"), "potion_medium", count=count)
 
 
 def _fill_potions_executioner(player: Dict, ratio: float = 1.0) -> Dict[str, int]:
@@ -1511,6 +1514,11 @@ def player_use_scroll(state: Dict, scroll_index: int) -> None:
                 _apply_stone_skin(state, enemy)
             if echo_targets:
                 _append_log(state, f"Эхо убийства: {echo_damage} урона по {len(echo_targets)} врагам.")
+    bleeding_before = [
+        enemy
+        for enemy in state.get("enemies", [])
+        if enemy.get("hp", 0) > 0 and enemy.get("bleed_turns", 0) > 0
+    ]
     if _is_executioner(state) and bleeding_before:
         player = state.get("player", {})
         for enemy in bleeding_before:
@@ -1930,7 +1938,7 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
                 label = potion_label(state.get("character_id"), "potion_medium")
                 _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
             elif added > 1:
-                label = potion_label(state.get("character_id"), "potion_medium", count=added)
+                label = potion_label_with_count(state.get("character_id"), "potion_medium", count=added)
                 _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
             if dropped:
                 noun = potion_noun_genitive_plural(state.get("character_id"))
@@ -2031,7 +2039,7 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
             label = potion_label(state.get("character_id"), "potion_medium")
             _append_log(state, f"Алхимический набор дарует <b>{label}</b>.")
         elif added > 1:
-            label = potion_label(state.get("character_id"), "potion_medium", count=added)
+            label = potion_label_with_count(state.get("character_id"), "potion_medium", count=added)
             _append_log(state, f"Алхимический набор дарует <b>{label}</b>.")
         if scroll:
             _append_log(state, f"Также вы получаете свиток <b>{scroll['name']}</b>.")
