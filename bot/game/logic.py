@@ -1758,8 +1758,15 @@ def generate_rewards(
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in upgrades
     ]
+    weapon_limit = 2
+    weapon_count = 0
     while len(rewards) < 3 and pool:
-        reward_type, item = random.choice(pool)
+        available_pool = [
+            entry for entry in pool if not (weapon_count >= weapon_limit and entry[0] == "weapon")
+        ]
+        if not available_pool:
+            break
+        reward_type, item = random.choice(available_pool)
         item_id = item["id"]
         if item_id in used_ids:
             continue
@@ -1767,6 +1774,7 @@ def generate_rewards(
         reward_item = copy.deepcopy(item)
         if reward_type == "weapon":
             scale_weapon_stats(reward_item, floor)
+            weapon_count += 1
         rewards.append({"type": reward_type, "item": reward_item})
     return rewards
 
