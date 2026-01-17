@@ -27,11 +27,29 @@
     "max_floor": 999
   },
   {
+    "id": "focus_minor",
+    "name": "Прицел в тени (+3% точности)",
+    "type": "stat",
+    "stat": "accuracy",
+    "amount": 0.03,
+    "min_floor": 1,
+    "max_floor": 999
+  },
+  {
     "id": "agility",
     "name": "Шаг в тени (+6% уклонения)",
     "type": "stat",
     "stat": "evasion",
     "amount": 0.06,
+    "min_floor": 1,
+    "max_floor": 999
+  },
+  {
+    "id": "agility_minor",
+    "name": "Тихий шаг (+3% уклонения)",
+    "type": "stat",
+    "stat": "evasion",
+    "amount": 0.03,
     "min_floor": 1,
     "max_floor": 999
   },
