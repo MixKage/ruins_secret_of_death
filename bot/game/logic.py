@@ -8,6 +8,8 @@ from .characters import (
     DUELIST_PARRY_REDUCTION,
     DUELIST_ZONE_CHARGES,
     DUELIST_ZONE_TURNS,
+    EXECUTIONER_ID,
+    EXECUTIONER_BLEED_CHANCE_BONUS,
     RUNE_GUARD_AP_BONUS,
     RUNE_GUARD_RETRIBUTION_PIERCE,
     RUNE_GUARD_RETRIBUTION_THRESHOLD,
@@ -39,6 +41,15 @@ from .characters import (
     apply_character_starting_stats,
     get_character,
     is_desperate_charge_available,
+    potion_full_name,
+    potion_label,
+    potion_menu_title,
+    potion_no_match_message,
+    potion_noun_genitive_plural,
+    potion_noun_plural,
+    potion_received_verb,
+    potion_empty_message,
+    potion_use_label,
     resolve_character_id,
 )
 from .combat_utils import _alive_enemies, _first_alive, _tally_kills
@@ -194,6 +205,7 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["executioner_heal_count"] = 0
     state["duelist_blade_used"] = False
     state["duelist_parry_used"] = False
+    _purge_executioner_strong_potions(state)
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
     else:
@@ -253,6 +265,47 @@ def _apply_executioner_last_breath_penalty(state: Dict) -> None:
                 _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
     else:
         state["executioner_last_breath_turns"] = 0
+
+
+def _executioner_bleed_chance(state: Dict, weapon: Dict) -> float:
+    base_chance = float(weapon.get("bleed_chance", 0.0) or 0.0)
+    if base_chance <= 0:
+        return 0.0
+    if _is_executioner(state):
+        base_chance = _clamp(base_chance + EXECUTIONER_BLEED_CHANCE_BONUS, 0.0, 1.0)
+    return base_chance
+
+
+def _executioner_inquisition_effect(state: Dict, late_floor: bool) -> str:
+    count = 2 if late_floor else 1
+    return potion_label(state.get("character_id"), "potion_medium", count=count, title=count == 1)
+
+
+def _fill_potions_executioner(player: Dict, ratio: float = 1.0) -> Dict[str, int]:
+    added_counts: Dict[str, int] = {}
+    for potion_id in ("potion_small", "potion_medium"):
+        limit = POTION_LIMITS.get(potion_id, 999)
+        target = max(1, int(limit * ratio)) if limit > 0 else 0
+        current = count_potions(player, potion_id)
+        if current >= target:
+            continue
+        potion = copy.deepcopy(get_upgrade_by_id(potion_id))
+        if not potion:
+            continue
+        to_add = target - current
+        added, _ = _add_potion(player, potion, count=to_add)
+        if added:
+            added_counts[potion_id] = added
+    return added_counts
+
+
+def _purge_executioner_strong_potions(state: Dict) -> None:
+    if not _is_executioner(state):
+        return
+    player = state.get("player", {})
+    potions = [potion for potion in player.get("potions", []) if potion.get("id") != "potion_strong"]
+    if len(potions) != len(player.get("potions", [])):
+        player["potions"] = potions
 
 
 def _duel_target(state: Dict) -> Dict | None:
@@ -615,10 +668,17 @@ def _upgrades_for_floor(floor: int) -> List[Dict]:
     return upgrades or UPGRADES
 
 
-def _filter_upgrades_for_player(upgrades: List[Dict], player: Dict | None, floor: int) -> List[Dict]:
+def _filter_upgrades_for_player(
+    upgrades: List[Dict],
+    player: Dict | None,
+    floor: int,
+    character_id: str | None = None,
+) -> List[Dict]:
     if not player:
         return upgrades
     filtered = upgrades
+    if character_id == EXECUTIONER_ID:
+        filtered = [item for item in filtered if item.get("id") != "potion_strong"]
     if _is_luck_maxed(player):
         filtered = [item for item in filtered if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
     if _is_ap_max_capped(player, floor):
@@ -670,8 +730,14 @@ def is_late_boss_floor(floor: int) -> bool:
 def is_any_boss_floor(floor: int) -> bool:
     return is_boss_floor(floor) or is_late_boss_floor(floor) or is_ultimate_boss_floor(floor)
 
-def generate_boss_artifacts() -> List[Dict]:
-    return [copy.deepcopy(option) for option in BOSS_ARTIFACT_OPTIONS]
+def generate_boss_artifacts(character_id: str | None = None) -> List[Dict]:
+    options = [copy.deepcopy(option) for option in BOSS_ARTIFACT_OPTIONS]
+    if character_id:
+        for option in options:
+            if option.get("id") == "artifact_potions":
+                label = potion_label(character_id, "potion_medium", count=2)
+                option["effect"] = f"2 {label} + случайный свиток"
+    return options
 
 def build_boss(player: Dict) -> Dict:
     ap_max = int(player.get("ap_max", 2))
@@ -1242,7 +1308,6 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                 state.get("floor"),
             )
     if hit:
-        executioner_bleed_ready = is_executioner and not state.get("executioner_bleed_used")
         retribution_ready = state.get("rune_guard_retribution_ready", False)
         armor_pierce_bonus = (
             RUNE_GUARD_RETRIBUTION_PIERCE if retribution_ready else 0.0
@@ -1259,12 +1324,6 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                 enemy.pop("hunter_mark", None)
             target["hunter_mark"] = True
             _append_log(state, f"Охотничья метка: цель {target['name']} отмечена.")
-        if executioner_bleed_ready:
-            state["executioner_bleed_used"] = True
-            bleed_damage = max(1, int(weapon.get("bleed_damage", 0)))
-            target["bleed_turns"] = max(target["bleed_turns"], 2)
-            target["bleed_damage"] = max(target["bleed_damage"], bleed_damage)
-            _append_log(state, f"{target['name']} истекает кровью.")
         if retribution_ready and armor_pierce_bonus > 0:
             state["rune_guard_retribution_ready"] = False
             _append_log(state, "Каменный Ответ усиливает удар — броня частично игнорирована.")
@@ -1284,7 +1343,8 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
                     _apply_stone_skin(state, enemy)
                 _append_log(state, f"Сплэш урон: {splash_damage} по {len(hit_targets)} врагам.")
 
-        if not executioner_bleed_ready and weapon["bleed_chance"] > 0 and random.random() < weapon["bleed_chance"]:
+        bleed_chance = _executioner_bleed_chance(state, weapon)
+        if bleed_chance > 0 and random.random() < bleed_chance:
             target["bleed_turns"] = max(target["bleed_turns"], 2)
             target["bleed_damage"] = max(target["bleed_damage"], weapon["bleed_damage"])
             _append_log(state, f"{target['name']} истекает кровью.")
@@ -1340,7 +1400,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
 def player_use_potion(state: Dict) -> None:
     player = state["player"]
     if not player["potions"]:
-        _append_log(state, "Зелий нет.")
+        _append_log(state, potion_empty_message(state.get("character_id")))
         return
 
     potion = player["potions"].pop()
@@ -1348,7 +1408,8 @@ def player_use_potion(state: Dict) -> None:
     heal = int(potion.get("heal", 0)) + bonus_heal
     player["hp"] = min(player["hp_max"], player["hp"] + heal)
     player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
-    _append_log(state, f"Вы используете зелье: +{heal} HP, +{potion['ap_restore']} ОД.")
+    used_label = potion_use_label(state.get("character_id"))
+    _append_log(state, f"Вы используете {used_label}: +{heal} HP, +{potion['ap_restore']} ОД.")
 
     check_battle_end(state)
 
@@ -1362,10 +1423,11 @@ def player_use_potion_by_id(state: Dict, potion_id: str) -> None:
             heal = int(potion.get("heal", 0)) + bonus_heal
             player["hp"] = min(player["hp_max"], player["hp"] + heal)
             player["ap"] = min(_effective_ap_max(state), player["ap"] + potion["ap_restore"])
-            _append_log(state, f"Вы используете зелье: +{heal} HP, +{potion['ap_restore']} ОД.")
+            used_label = potion_use_label(state.get("character_id"))
+            _append_log(state, f"Вы используете {used_label}: +{heal} HP, +{potion['ap_restore']} ОД.")
             check_battle_end(state)
             return
-    _append_log(state, "Нет подходящего зелья.")
+    _append_log(state, potion_no_match_message(state.get("character_id")))
 
 
 def player_use_scroll(state: Dict, scroll_index: int) -> None:
@@ -1584,11 +1646,15 @@ def check_battle_end(state: Dict) -> None:
             _append_log(state, "Награда: <b>+5</b> к макс. HP.")
             state["treasure_xp"] = state.get("treasure_xp", 0) + 10
             _append_log(state, "Награда: <b>+10 XP</b>.")
-            added = _fill_potions(state["player"], ratio=0.5)
-            if added:
-                _append_log(state, "Запас зелий пополнен до половины.")
+            if _is_executioner(state):
+                added = _fill_potions_executioner(state["player"], ratio=0.5)
             else:
-                _append_log(state, "Запас зелий уже полон.")
+                added = _fill_potions(state["player"], ratio=0.5)
+            noun = potion_noun_genitive_plural(state.get("character_id"))
+            if added:
+                _append_log(state, f"Запас {noun} пополнен до половины.")
+            else:
+                _append_log(state, f"Запас {noun} уже полон.")
             scroll = _grant_lightning_scroll(state["player"])
             if scroll:
                 _append_log(state, f"Получен свиток: <b>{scroll['name']}</b>.")
@@ -1599,13 +1665,28 @@ def check_battle_end(state: Dict) -> None:
             player["hp_max"] += 5
             player["hp"] += 5
             _append_log(state, "Награда: <b>+5</b> к макс. HP.")
-            added, dropped = _grant_strong_potion(state["player"], count=1)
-            if added:
-                _append_log(state, "Награда: <b>сильное зелье</b>.")
-            if dropped:
-                _append_log(state, "Нет места для зелий — награда сгорает.")
+            if _is_executioner(state):
+                added, dropped = _grant_medium_potion(state["player"], count=1)
+                if added:
+                    label = potion_label(state.get("character_id"), "potion_medium", title=True)
+                    _append_log(state, f"Награда: <b>{label}</b>.")
+                if dropped:
+                    noun = potion_noun_genitive_plural(state.get("character_id"))
+                    _append_log(state, f"Нет места для {noun} — награда сгорает.")
+            else:
+                added, dropped = _grant_strong_potion(state["player"], count=1)
+                if added:
+                    label = potion_label(state.get("character_id"), "potion_strong", title=True)
+                    _append_log(state, f"Награда: <b>{label}</b>.")
+                if dropped:
+                    noun = potion_noun_genitive_plural(state.get("character_id"))
+                    _append_log(state, f"Нет места для {noun} — награда сгорает.")
         state["phase"] = "reward"
-        state["rewards"] = generate_rewards(state["floor"], state.get("player"))
+        state["rewards"] = generate_rewards(
+            state["floor"],
+            state.get("player"),
+            state.get("character_id"),
+        )
         _append_log(state, f"<b>Этаж {state['floor']}</b> зачищен. Выберите награду.")
 
 def generate_event_options() -> List[Dict]:
@@ -1624,8 +1705,14 @@ def _event_options_for_floor(floor: int) -> List[Dict]:
             option["effect"] = "+2-3 к макс. HP + малое и среднее зелье"
     return options
 
-def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
+def _build_chest_reward(
+    floor: int,
+    player: Dict | None = None,
+    character_id: str | None = None,
+) -> Dict | None:
     pool = _filter_chest_loot_for_player(_chest_loot_for_floor(floor), player, floor)
+    if character_id == EXECUTIONER_ID:
+        pool = [item for item in pool if item.get("id") != "potion_strong"]
     if not pool:
         return None
     entry = copy.deepcopy(random.choice(pool))
@@ -1651,10 +1738,14 @@ def _build_chest_reward(floor: int, player: Dict | None = None) -> Dict | None:
         return {"type": "scroll", "item": scroll}
     return None
 
-def generate_rewards(floor: int, player: Dict | None = None) -> List[Dict]:
+def generate_rewards(
+    floor: int,
+    player: Dict | None = None,
+    character_id: str | None = None,
+) -> List[Dict]:
     rewards = []
     used_ids = set()
-    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor)
+    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor, character_id)
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in upgrades
     ]
@@ -1670,8 +1761,12 @@ def generate_rewards(floor: int, player: Dict | None = None) -> List[Dict]:
         rewards.append({"type": reward_type, "item": reward_item})
     return rewards
 
-def generate_single_reward(floor: int, player: Dict | None = None) -> Dict:
-    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor)
+def generate_single_reward(
+    floor: int,
+    player: Dict | None = None,
+    character_id: str | None = None,
+) -> Dict:
+    upgrades = _filter_upgrades_for_player(_upgrades_for_floor(floor), player, floor, character_id)
     pool = [("weapon", item) for item in _weapons_for_floor(floor)] + [
         ("upgrade", item) for item in upgrades
     ]
@@ -1742,11 +1837,18 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
             _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
             return True
         if upgrade["type"] == "potion":
-            added, dropped = _add_potion(player, upgrade, count=1)
+            potion = upgrade
+            if _is_executioner(state) and potion.get("id") == "potion_strong":
+                potion = copy.deepcopy(get_upgrade_by_id("potion_medium")) or potion
+            added, dropped = _add_potion(player, potion, count=1)
             if added:
-                _append_log(state, f"Получено зелье: <b>{upgrade['name']}</b>.")
+                character_id = state.get("character_id")
+                verb = potion_received_verb(character_id)
+                name = potion_full_name(character_id, potion)
+                _append_log(state, f"{verb} <b>{name}</b>.")
             if dropped:
-                _append_log(state, "Нет места для зелий — находка сгорает.")
+                noun = potion_noun_genitive_plural(state.get("character_id"))
+                _append_log(state, f"Нет места для {noun} — находка сгорает.")
             return True
     if reward["type"] == "scroll":
         scroll = _add_scroll(player, reward["item"])
@@ -1761,6 +1863,36 @@ def prepare_event(state: Dict) -> None:
     last_event_id = state.get("last_event_id")
     state["phase"] = "event"
     options = _event_options_for_floor(state.get("floor", 1))
+    if _is_executioner(state):
+        late_floor = state.get("floor", 0) >= CURSED_FLOOR_MIN_FLOOR
+        for option in options:
+            if option.get("id") == "holy_spring":
+                option["name"] = "Камера Дознания"
+                option["effect"] = _executioner_inquisition_effect(state, late_floor)
+            elif option.get("id") == "treasure_chest":
+                if late_floor:
+                    option["effect"] = (
+                        "Шанс на награду +2 этажа или свиток магии + "
+                        f"{potion_label(state.get('character_id'), 'potion_small')} "
+                        f"и {potion_label(state.get('character_id'), 'potion_medium')}"
+                    )
+                else:
+                    option["effect"] = (
+                        "Шанс на награду +2 этажа или свиток магии + "
+                        f"{potion_label(state.get('character_id'), 'potion_small')}"
+                    )
+            elif option.get("id") == "campfire":
+                if late_floor:
+                    option["effect"] = (
+                        "+2-3 к макс. HP + "
+                        f"{potion_label(state.get('character_id'), 'potion_small')} "
+                        f"и {potion_label(state.get('character_id'), 'potion_medium')}"
+                    )
+                else:
+                    option["effect"] = (
+                        "+2-3 к макс. HP + "
+                        f"{potion_label(state.get('character_id'), 'potion_small')}"
+                    )
     if last_event_id in {"treasure_chest", "campfire"}:
         options = [option for option in options if option.get("id") != last_event_id]
     state["event_options"] = options
@@ -1790,21 +1922,44 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
     advance = True
     late_floor = state.get("floor", 0) >= CURSED_FLOOR_MIN_FLOOR
     if event_id == "holy_spring":
-        player["hp"] = player["hp_max"]
-        _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
-        if late_floor:
-            added, dropped = _grant_small_potion(player)
-            if added:
-                _append_log(state, "Вы находите <b>малое зелье</b>.")
+        if _is_executioner(state):
+            count = 2 if late_floor else 1
+            added, dropped = _grant_medium_potion(player, count=count)
+            if added == 1:
+                label = potion_label(state.get("character_id"), "potion_medium")
+                _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
+            elif added > 1:
+                label = potion_label(state.get("character_id"), "potion_medium", count=added)
+                _append_log(state, f"Камера Дознания приносит <b>{label}</b>.")
             if dropped:
-                _append_log(state, "Нет места для зелий — находка сгорает.")
+                noun = potion_noun_genitive_plural(state.get("character_id"))
+                _append_log(state, f"Нет места для {noun} — находка сгорает.")
+        else:
+            player["hp"] = player["hp_max"]
+            _append_log(state, "Источник благодати полностью <b>исцеляет</b> вас.")
+            if late_floor:
+                added, dropped = _grant_small_potion(player)
+                if added:
+                    label = potion_label(state.get("character_id"), "potion_small")
+                    _append_log(state, f"Вы находите <b>{label}</b>.")
+                if dropped:
+                    noun = potion_noun_genitive_plural(state.get("character_id"))
+                    _append_log(state, f"Нет места для {noun} — находка сгорает.")
     elif event_id == "treasure_chest":
         state["chests_opened"] = state.get("chests_opened", 0) + 1
         chance = _clamp(player["luck"], 0.05, 0.7)
         if random.random() < chance:
-            reward = _build_chest_reward(state["floor"] + 2, player)
+            reward = _build_chest_reward(
+                state["floor"] + 2,
+                player,
+                state.get("character_id"),
+            )
             if not reward:
-                reward = generate_single_reward(state["floor"] + 2, player)
+                reward = generate_single_reward(
+                    state["floor"] + 2,
+                    player,
+                    state.get("character_id"),
+                )
             _append_log(state, "Сундук раскрывает <b>редкую</b> находку.")
             state["phase"] = "treasure"
             state["treasure_reward"] = reward
@@ -1816,15 +1971,18 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         dropped_any = False
         added, dropped = _grant_small_potion(player)
         if added:
-            _append_log(state, "Вы находите <b>малое зелье</b>.")
+            label = potion_label(state.get("character_id"), "potion_small")
+            _append_log(state, f"Вы находите <b>{label}</b>.")
         dropped_any = dropped_any or dropped
         if late_floor:
             added, dropped = _grant_medium_potion(player, count=1)
             if added:
-                _append_log(state, "Вы находите <b>среднее зелье</b>.")
+                label = potion_label(state.get("character_id"), "potion_medium")
+                _append_log(state, f"Вы находите <b>{label}</b>.")
             dropped_any = dropped_any or dropped
         if dropped_any:
-            _append_log(state, "Нет места для зелий — находка сгорает.")
+            noun = potion_noun_genitive_plural(state.get("character_id"))
+            _append_log(state, f"Нет места для {noun} — находка сгорает.")
     elif event_id == "campfire":
         bonus = random.randint(2, 3)
         player["hp_max"] += bonus
@@ -1833,15 +1991,18 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
         dropped_any = False
         added, dropped = _grant_small_potion(player)
         if added:
-            _append_log(state, "Вы находите <b>малое зелье</b>.")
+            label = potion_label(state.get("character_id"), "potion_small")
+            _append_log(state, f"Вы находите <b>{label}</b>.")
         dropped_any = dropped_any or dropped
         if late_floor:
             added, dropped = _grant_medium_potion(player, count=1)
             if added:
-                _append_log(state, "Вы находите <b>среднее зелье</b>.")
+                label = potion_label(state.get("character_id"), "potion_medium")
+                _append_log(state, f"Вы находите <b>{label}</b>.")
             dropped_any = dropped_any or dropped
         if dropped_any:
-            _append_log(state, "Нет места для зелий — находка сгорает.")
+            noun = potion_noun_genitive_plural(state.get("character_id"))
+            _append_log(state, f"Нет места для {noun} — находка сгорает.")
     else:
         _append_log(state, "Неверный выбор комнаты.")
 
@@ -1866,13 +2027,16 @@ def apply_boss_artifact_choice(state: Dict, artifact_id: str) -> None:
         added, dropped = _grant_medium_potion(player, count=2)
         scroll = _grant_random_scroll(player)
         if added == 1:
-            _append_log(state, "Алхимический набор дарует <b>среднее зелье</b>.")
+            label = potion_label(state.get("character_id"), "potion_medium")
+            _append_log(state, f"Алхимический набор дарует <b>{label}</b>.")
         elif added > 1:
-            _append_log(state, f"Алхимический набор дарует <b>{added} средних зелья</b>.")
+            label = potion_label(state.get("character_id"), "potion_medium", count=added)
+            _append_log(state, f"Алхимический набор дарует <b>{label}</b>.")
         if scroll:
             _append_log(state, f"Также вы получаете свиток <b>{scroll['name']}</b>.")
         if dropped:
-            _append_log(state, "Лишние зелья сгорают.")
+            noun = potion_noun_plural(state.get("character_id"))
+            _append_log(state, f"Лишние {noun} сгорают.")
     else:
         _append_log(state, "Вы не смогли выбрать артефакт.")
 
@@ -1933,7 +2097,7 @@ def advance_floor(state: Dict) -> None:
         player["hp"] = player["hp_max"]
         _refresh_turn_ap(state)
         state["phase"] = "boss_prep"
-        state["boss_artifacts"] = generate_boss_artifacts()
+        state["boss_artifacts"] = generate_boss_artifacts(state.get("character_id"))
         if is_boss_floor(state["floor"]):
             state["boss_kind"] = "necromancer"
             state["boss_name"] = "Некромант"
@@ -2037,7 +2201,8 @@ def render_state(state: Dict) -> str:
     if _is_assassin(state) and not state.get("assassin_echo_used"):
         status_notes.append("Эхо убийства — готово")
     if _is_assassin(state):
-        status_notes.append("Ядовитые настои — зелья +2 HP")
+        noun = potion_noun_plural(state.get("character_id"))
+        status_notes.append(f"Ядовитые настои — {noun} +2 HP")
     if is_duelist and duel_active:
         status_notes.append("Дуэль — урон +25%, точность +15%")
     if is_duelist and state.get("duel_turns_left"):
@@ -2053,8 +2218,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("Гон по следу — +1 ОД за первое убийство")
     if _is_hunter(state) and any(enemy.get("hunter_mark") for enemy in state.get("enemies", [])):
         status_notes.append("Охотничья метка — активна")
-    if _is_executioner(state) and not state.get("executioner_bleed_used"):
-        status_notes.append("Точность мясника — кровотечение")
+    if _is_executioner(state):
+        status_notes.append("Точность мясника — +20% к шансу кровотечения")
     if (
         _is_executioner(state)
         and not state.get("executioner_onslaught_used")
@@ -2174,7 +2339,8 @@ def render_state(state: Dict) -> str:
         small_count = count_potions(player, "potion_small")
         medium_count = count_potions(player, "potion_medium")
         strong_count = count_potions(player, "potion_strong")
-        lines.append("<b>Выбор зелья:</b>")
+        title = potion_menu_title(state.get("character_id"))
+        lines.append(f"<b>{title}:</b>")
         small_heal, small_ap = _potion_stats(player, "potion_small")
         medium_heal, medium_ap = _potion_stats(player, "potion_medium")
         strong_heal, strong_ap = _potion_stats(player, "potion_strong")
@@ -2183,22 +2349,26 @@ def render_state(state: Dict) -> str:
             small_heal += potion_bonus
             medium_heal += potion_bonus
             strong_heal += potion_bonus
+        small_label = potion_label(state.get("character_id"), "potion_small", title=True)
+        medium_label = potion_label(state.get("character_id"), "potion_medium", title=True)
+        strong_label = potion_label(state.get("character_id"), "potion_strong", title=True)
         if small_count > 0:
             small_limit = POTION_LIMITS.get("potion_small", small_count)
             lines.append(
-                f"Малое зелье: <b>{small_count}/{small_limit}</b> (+{small_heal} HP, +{small_ap} ОД)"
+                f"{small_label}: <b>{small_count}/{small_limit}</b> (+{small_heal} HP, +{small_ap} ОД)"
             )
         if medium_count > 0:
             medium_limit = POTION_LIMITS.get("potion_medium", medium_count)
             lines.append(
-                f"Среднее зелье: <b>{medium_count}/{medium_limit}</b> (+{medium_heal} HP, +{medium_ap} ОД)"
+                f"{medium_label}: <b>{medium_count}/{medium_limit}</b> (+{medium_heal} HP, +{medium_ap} ОД)"
             )
-        if strong_count > 0:
+        if strong_count > 0 and not _is_executioner(state):
             strong_limit = POTION_LIMITS.get("potion_strong", strong_count)
             lines.append(
-                f"Сильное зелье: <b>{strong_count}/{strong_limit}</b> (+{strong_heal} HP, +{strong_ap} ОД)"
+                f"{strong_label}: <b>{strong_count}/{strong_limit}</b> (+{strong_heal} HP, +{strong_ap} ОД)"
             )
-        lines.append("<i>Выберите зелье для использования.</i>")
+        use_label = potion_use_label(state.get("character_id"))
+        lines.append(f"<i>Выберите {use_label} для использования.</i>")
     elif state["phase"] == "inventory":
         lines.append("<b>Инвентарь:</b>")
         magic_damage = _magic_scroll_damage(state, player, ap_max=_effective_ap_max(state))

@@ -44,6 +44,7 @@ EXECUTIONER_HP_BONUS = 4
 EXECUTIONER_ARMOR_BONUS = 1.0
 EXECUTIONER_EVASION_PENALTY = 0.05
 EXECUTIONER_BLEED_DAMAGE_BONUS = 0.25
+EXECUTIONER_BLEED_CHANCE_BONUS = 0.20
 DUELIST_ARMOR_BONUS = 1.0
 DUELIST_EVASION_BONUS = 0.10
 DUELIST_ACCURACY_BONUS = 0.05
@@ -54,6 +55,38 @@ DUELIST_ZONE_CHARGES = 2
 DUELIST_ZONE_TURNS = 2
 DUELIST_PARRY_REDUCTION = 0.60
 DUELIST_PARRY_COUNTER_RATIO = 0.50
+POTION_NAMING = {
+    DEFAULT_CHARACTER_ID: {
+        "noun_forms": ("зелье", "зелья", "зелий"),
+        "noun_genitive_singular": "зелья",
+        "noun_accusative": "зелье",
+        "button_noun": "",
+        "action_label": "Зелье",
+        "menu_title": "Выбор зелья",
+        "received_verb": "Получено",
+        "no_match_adjective": "подходящего",
+        "adjectives": {
+            "potion_small": ("малое", "малых"),
+            "potion_medium": ("среднее", "средних"),
+            "potion_strong": ("сильное", "сильных"),
+        },
+    },
+    EXECUTIONER_ID: {
+        "noun_forms": ("вытяжка мученика", "вытяжки мученика", "вытяжек мученика"),
+        "noun_genitive_singular": "вытяжки мученика",
+        "noun_accusative": "вытяжку мученика",
+        "button_noun": "вытяжка",
+        "action_label": "Вытяжка",
+        "menu_title": "Выбор вытяжки",
+        "received_verb": "Получена",
+        "no_match_adjective": "подходящей",
+        "adjectives": {
+            "potion_small": ("малая", "малых"),
+            "potion_medium": ("средняя", "средних"),
+            "potion_strong": ("сильная", "сильных"),
+        },
+    },
+}
 
 CHARACTERS = {
     DEFAULT_CHARACTER_ID: {
@@ -119,7 +152,8 @@ CHARACTERS = {
         "name": "Палач",
         "description": [
             "HP +4, броня +1, уклонение -5%, точность без изменений.",
-            "Точность мясника: первая атака в ход гарантированно накладывает кровотечение.",
+            "Точность мясника: если оружие накладывает кровотечение, шанс +20% (макс. 100%).",
+            "Вытяжка мученика: зелья лечения переименованы, сильные недоступны.",
             "Жатва: по кровоточащим целям урон +25%.",
             "Приговор: убийство кровоточащего врага лечит 5 HP (до 2 раз за ход).",
             "Натиск: если есть кровотечение, следующая атака в ход получает +1 ОД.",
@@ -153,6 +187,101 @@ def resolve_character_id(character_id: str | None) -> str:
     if chosen_id not in CHARACTERS:
         return DEFAULT_CHARACTER_ID
     return chosen_id
+
+
+def _potion_terms(character_id: str | None) -> Dict:
+    resolved = resolve_character_id(character_id)
+    return POTION_NAMING.get(resolved, POTION_NAMING[DEFAULT_CHARACTER_ID])
+
+
+def _russian_plural_index(count: int) -> int:
+    if count % 10 == 1 and count % 100 != 11:
+        return 0
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return 1
+    return 2
+
+
+def potion_action_label(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms.get("action_label", "Зелье")
+
+
+def potion_menu_title(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms.get("menu_title", "Выбор зелья")
+
+
+def potion_use_label(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms.get("noun_accusative", terms["noun_forms"][0])
+
+
+def potion_noun_genitive_plural(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms["noun_forms"][2]
+
+
+def potion_noun_plural(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms["noun_forms"][1]
+
+
+def potion_noun_genitive_singular(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms.get("noun_genitive_singular", terms["noun_forms"][1])
+
+
+def potion_received_verb(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    return terms.get("received_verb", "Получено")
+
+
+def potion_no_match_message(character_id: str | None) -> str:
+    terms = _potion_terms(character_id)
+    adjective = terms.get("no_match_adjective", "подходящего")
+    noun = potion_noun_genitive_singular(character_id)
+    return f"Нет {adjective} {noun}."
+
+
+def potion_empty_message(character_id: str | None) -> str:
+    noun = potion_noun_genitive_plural(character_id)
+    if noun:
+        noun = noun[0].upper() + noun[1:]
+    return f"{noun} нет."
+
+
+def potion_label(character_id: str | None, potion_id: str, count: int = 1, title: bool = False) -> str:
+    terms = _potion_terms(character_id)
+    adjective = terms.get("adjectives", {}).get(potion_id, ("", ""))[0 if count == 1 else 1]
+    if count == 1:
+        noun = terms["noun_forms"][0]
+    else:
+        noun = terms["noun_forms"][_russian_plural_index(count)]
+    label = f"{adjective} {noun}".strip()
+    if title and label:
+        label = label[0].upper() + label[1:]
+    return label
+
+
+def potion_button_label(character_id: str | None, potion_id: str, title: bool = False) -> str:
+    terms = _potion_terms(character_id)
+    adjective = terms.get("adjectives", {}).get(potion_id, ("", ""))[0]
+    noun = terms.get("button_noun", terms["noun_forms"][0])
+    label = f"{adjective} {noun}".strip()
+    if title and label:
+        label = label[0].upper() + label[1:]
+    return label
+
+
+def potion_full_name(character_id: str | None, potion: Dict) -> str:
+    potion_id = potion.get("id", "")
+    label = potion_label(character_id, potion_id, title=True)
+    heal = int(potion.get("heal", 0))
+    ap_restore = int(potion.get("ap_restore", 0))
+    if heal or ap_restore:
+        return f"{label} (лечит {heal} HP и +{ap_restore} ОД)"
+    return label
 
 
 def apply_character_starting_stats(player: Dict, character_id: str) -> None:

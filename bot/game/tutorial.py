@@ -4,6 +4,7 @@ import copy
 from typing import Dict
 
 from .combat_utils import _first_alive
+from .characters import potion_use_label
 from .common import _append_log
 from .data import get_scroll_by_id, get_upgrade_by_id
 from .effects import _apply_freeze
@@ -304,7 +305,8 @@ def _tutorial_use_potion(state: Dict) -> str:
     ap_restore = int(potion.get("ap_restore", 0))
     player["hp"] = min(int(player.get("hp_max", 0)), int(player.get("hp", 0)) + heal)
     player["ap"] = min(int(player.get("ap_max", 1)), int(player.get("ap", 0)) + ap_restore)
-    _append_log(state, f"Вы используете зелье: +{heal} HP, +{ap_restore} ОД.")
+    label = potion_use_label(state.get("character_id"))
+    _append_log(state, f"Вы используете {label}: +{heal} HP, +{ap_restore} ОД.")
     _tutorial_advance(state)
     return "continue"
 

@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from bot import db
-from bot.game.characters import DEFAULT_CHARACTER_ID
+from bot.game.characters import DEFAULT_CHARACTER_ID, potion_action_label
 from bot.game.logic import (
     apply_reward,
     apply_event_choice,
@@ -239,12 +239,14 @@ def _battle_markup(state: dict):
     can_attack_all = player["ap"] > 1
     can_endturn = player["ap"] <= 0 or tutorial_force_endturn(state)
     show_info = bool(state.get("show_info"))
+    potion_label = potion_action_label(state.get("character_id"))
     return battle_kb(
         has_potion=has_potion,
         can_attack=can_attack,
         can_attack_all=can_attack_all,
         show_info=show_info,
         can_endturn=can_endturn,
+        potion_label=potion_label,
     )
 
 
@@ -290,7 +292,10 @@ def _markup_for_state(state: dict, is_admin: bool = False):
         small_count = count_potions(state["player"], "potion_small")
         medium_count = count_potions(state["player"], "potion_medium")
         strong_count = count_potions(state["player"], "potion_strong")
-        return potion_kb(small_count, medium_count, strong_count)
+        character_id = state.get("character_id")
+        if character_id == "executioner":
+            strong_count = 0
+        return potion_kb(small_count, medium_count, strong_count, character_id=character_id)
     return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
 

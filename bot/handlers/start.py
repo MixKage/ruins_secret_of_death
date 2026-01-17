@@ -3,6 +3,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 from bot import db
+from bot.game.characters import potion_action_label
 from bot.game.logic import new_tutorial_state, render_state, tutorial_force_endturn, is_desperate_charge_available
 from bot.handlers.helpers import is_admin_id
 from bot.keyboards import battle_kb, inventory_kb, main_menu_kb, tutorial_fail_kb
@@ -34,6 +35,7 @@ def _tutorial_markup(state: dict):
         can_attack_all=player.get("ap", 0) > 1,
         show_info=bool(state.get("show_info")),
         can_endturn=player.get("ap", 0) <= 0 or tutorial_force_endturn(state),
+        potion_label=potion_action_label(state.get("character_id")),
     )
 
 

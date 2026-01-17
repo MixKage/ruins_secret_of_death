@@ -1,6 +1,8 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.game.characters import potion_button_label
+
 
 def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -33,6 +35,7 @@ def battle_kb(
     can_attack_all: bool,
     show_info: bool,
     can_endturn: bool,
+    potion_label: str = "Зелье",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if can_attack:
@@ -42,7 +45,7 @@ def battle_kb(
     if can_endturn:
         builder.button(text="Завершить ход", callback_data="action:endturn")
     if has_potion:
-        builder.button(text="Зелье", callback_data="action:potion")
+        builder.button(text=potion_label, callback_data="action:potion")
     builder.button(text="Инвентарь", callback_data="action:inventory")
     builder.button(text="Испытания руин", callback_data="action:run_tasks")
     info_text = "Скрыть справку" if show_info else "Справка"
@@ -68,14 +71,22 @@ def tutorial_fail_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def potion_kb(small_count: int, medium_count: int, strong_count: int) -> InlineKeyboardMarkup:
+def potion_kb(
+    small_count: int,
+    medium_count: int,
+    strong_count: int,
+    character_id: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if small_count > 0:
-        builder.button(text=f"Малое ({small_count})", callback_data="potion:small")
+        label = potion_button_label(character_id, "potion_small", title=True)
+        builder.button(text=f"{label} ({small_count})", callback_data="potion:small")
     if medium_count > 0:
-        builder.button(text=f"Среднее ({medium_count})", callback_data="potion:medium")
+        label = potion_button_label(character_id, "potion_medium", title=True)
+        builder.button(text=f"{label} ({medium_count})", callback_data="potion:medium")
     if strong_count > 0:
-        builder.button(text=f"Сильное ({strong_count})", callback_data="potion:strong")
+        label = potion_button_label(character_id, "potion_strong", title=True)
+        builder.button(text=f"{label} ({strong_count})", callback_data="potion:strong")
     builder.button(text="Назад", callback_data="potion:back")
     builder.adjust(1)
     return builder.as_markup()
