@@ -811,6 +811,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str, character_id: str 
         "guaranteed_hit_count": 0,
         "accuracy": accuracy,
         "evasion": evasion,
+        "always_hit": True,
         "bleed_turns": 0,
         "bleed_damage": 0,
         "burn_turns": 0,
