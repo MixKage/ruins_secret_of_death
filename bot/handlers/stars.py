@@ -198,7 +198,7 @@ async def stars_success(message: Message) -> None:
             slot_note = "Вам доступен новый слот открытия персонажа."
         elif required_level:
             remaining = max(0, required_level - new_level)
-            slot_note = f"Осталось уровней до нового слота персонажей: N {remaining}."
+            slot_note = f"Осталось уровней до нового слота персонажей: {remaining}."
         else:
             slot_note = "Все герои уже открыты."
         await message.answer(
