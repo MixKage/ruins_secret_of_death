@@ -47,16 +47,15 @@ from bot.keyboards import (
     tutorial_fail_kb,
     story_nav_kb,
     second_chance_kb,
+    second_chance_owned_kb,
 )
-from bot.handlers.stars import STARS_CURRENCY, STARS_PROVIDER_TOKEN
+from bot.handlers.stars import SECOND_CHANCE_STARS, STARS_CURRENCY, STARS_PROVIDER_TOKEN
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.progress import ensure_current_season, record_run_progress, xp_to_level
 from bot.story import build_chapter_caption, chapter_photo_path, max_unlocked_chapter, STORY_MAX_CHAPTERS
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
-
-SECOND_CHANCE_STARS = 2
 
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
@@ -154,6 +153,7 @@ async def _finalize_run_after_death(
     run_id: int,
     state: dict,
 ) -> None:
+    _append_death_log(state)
     old_xp = await _get_user_xp(user_id)
     await db.update_run(run_id, state)
     await db.finish_run(run_id, state.get("floor", 0))
@@ -177,12 +177,19 @@ async def _finalize_run_after_death(
         reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
     )
 
+def _append_death_log(state: dict) -> None:
+    log = state.get("log", [])
+    if any("Забег окончен." in str(line) for line in log):
+        return
+    _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
+
 async def _offer_second_chance(
     callback: CallbackQuery,
     run_id: int,
     state: dict,
 ) -> None:
     state["phase"] = "second_chance_offer"
+    state["second_chance_offer_type"] = "buy"
     _append_log(state, "Хотите выкупить амулет второго шанса за 2⭐ и продолжить бой?")
     await db.update_run(run_id, state)
     await callback.answer()
@@ -193,6 +200,25 @@ async def _offer_second_chance(
             callback.from_user.id,
             render_state(state),
             reply_markup=second_chance_kb(),
+        )
+
+async def _offer_second_chance_owned(
+    callback: CallbackQuery,
+    run_id: int,
+    state: dict,
+) -> None:
+    state["phase"] = "second_chance_offer"
+    state["second_chance_offer_type"] = "owned"
+    _append_log(state, "Использовать амулет второго шанса или отказаться?")
+    await db.update_run(run_id, state)
+    await callback.answer()
+    if callback.message:
+        await safe_edit_text(callback.message, render_state(state), reply_markup=second_chance_owned_kb())
+    elif callback.from_user:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            render_state(state),
+            reply_markup=second_chance_owned_kb(),
         )
 
 
@@ -347,6 +373,8 @@ def _markup_for_state(state: dict, is_admin: bool = False):
             strong_count = 0
         return potion_kb(small_count, medium_count, strong_count, character_id=character_id)
     if state["phase"] == "second_chance_offer":
+        if state.get("second_chance_offer_type") == "owned":
+            return second_chance_owned_kb()
         return second_chance_kb()
     return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
@@ -581,7 +609,10 @@ async def battle_action(callback: CallbackQuery) -> None:
         return
 
     if state["phase"] == "dead":
-        await _offer_second_chance(callback, run_id, state)
+        if state.get("player", {}).get("second_chance"):
+            await _offer_second_chance_owned(callback, run_id, state)
+        else:
+            await _offer_second_chance(callback, run_id, state)
         return
     else:
         await db.update_run(run_id, state)
@@ -639,7 +670,12 @@ async def second_chance_action(callback: CallbackQuery) -> None:
         return
 
     action = callback.data.split(":", 1)[1]
+    offer_type = state.get("second_chance_offer_type", "buy")
     if action == "buy":
+        if offer_type != "buy":
+            await callback.answer("Сейчас можно только использовать амулет.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
         if callback.from_user is None:
             return
         payload = f"stars_second_chance:{callback.from_user.id}:{run_id}"
@@ -655,8 +691,22 @@ async def second_chance_action(callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
+    if action == "use":
+        if offer_type != "owned":
+            await callback.answer("Амулета у вас нет.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        from bot.game.logic import apply_second_chance
+        apply_second_chance(state, note="Амулет второго шанса спасает вас: 1 HP и полные ОД.", consume=True)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+
     if action == "decline":
         state["phase"] = "dead"
+        state.pop("second_chance_offer_type", None)
+        _append_death_log(state)
         await _finalize_run_after_death(callback, user_row[0], run_id, state)
         return
 
@@ -967,7 +1017,10 @@ async def event_choice(callback: CallbackQuery) -> None:
     apply_event_choice(state, event_id)
 
     if state["phase"] == "dead":
-        await _offer_second_chance(callback, run_id, state)
+        if state.get("player", {}).get("second_chance"):
+            await _offer_second_chance_owned(callback, run_id, state)
+        else:
+            await _offer_second_chance(callback, run_id, state)
         return
 
     await db.update_run(run_id, state)

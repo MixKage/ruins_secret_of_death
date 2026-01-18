@@ -141,7 +141,12 @@ async def stars_pre_checkout(query: PreCheckoutQuery) -> None:
             await query.answer(ok=False, error_message="Забег не найден.")
             return
         run_user_id, is_active, state = run_row
-        if not is_active or run_user_id != user_row[0] or state.get("phase") != "second_chance_offer":
+        if (
+            not is_active
+            or run_user_id != user_row[0]
+            or state.get("phase") != "second_chance_offer"
+            or state.get("second_chance_offer_type") != "buy"
+        ):
             await query.answer(ok=False, error_message="Второй шанс недоступен.")
             return
         await query.answer(ok=True)
@@ -220,7 +225,12 @@ async def stars_success(message: Message) -> None:
         if not run_row:
             return
         run_user_id, is_active, state = run_row
-        if not is_active or run_user_id != internal_user_id or state.get("phase") != "second_chance_offer":
+        if (
+            not is_active
+            or run_user_id != internal_user_id
+            or state.get("phase") != "second_chance_offer"
+            or state.get("second_chance_offer_type") != "buy"
+        ):
             return
         from bot.game.logic import apply_second_chance
         from bot.handlers.game import _markup_for_state

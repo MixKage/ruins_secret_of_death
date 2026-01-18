@@ -221,13 +221,20 @@ def _refresh_turn_ap(state: Dict) -> None:
     if state.get("berserk_meat_turns", 0) > 0:
         state["berserk_meat_turns"] = max(0, int(state.get("berserk_meat_turns", 0)) - 1)
 
-def apply_second_chance(state: Dict, note: str | None = None) -> None:
+def apply_second_chance(
+    state: Dict,
+    note: str | None = None,
+    consume: bool = False,
+) -> None:
     player = state.get("player", {})
     if not player:
         return
+    if consume:
+        player["second_chance"] = False
     player["hp"] = 1
     player["ap"] = _effective_ap_max(state)
     state["phase"] = "battle"
+    state.pop("second_chance_offer_type", None)
     _append_log(state, note or "Амулет второго шанса спасает вас: 1 HP и полные ОД.")
 
 def _apply_rune_guard_shield(state: Dict) -> None:
@@ -279,7 +286,6 @@ def _apply_executioner_last_breath_penalty(state: Dict) -> None:
             if player["hp"] <= 0:
                 player["hp"] = 0
                 state["phase"] = "dead"
-                _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
     else:
         state["executioner_last_breath_turns"] = 0
 
@@ -1705,18 +1711,8 @@ def enemy_phase(state: Dict) -> None:
                     "Неистовая живучесть: смертельный удар пережит, HP полностью восстановлено.",
                 )
                 continue
-            if _has_second_chance(player):
-                player["second_chance"] = False
-                player["hp"] = 1
-                player["ap"] = _effective_ap_max(state)
-                _append_log(
-                    state,
-                    "Амулет второго шанса раскалывается: вы выживаете с 1 HP и полными ОД.",
-                )
-                continue
             player["hp"] = 0
             state["phase"] = "dead"
-            _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
             return
 
     if state["phase"] == "battle" and group_size > 1 and total_damage > 0:
