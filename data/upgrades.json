@@ -81,6 +81,13 @@
     "max_floor": 999
   },
   {
+    "id": "second_chance_amulet",
+    "name": "Амулет второго шанса (воскрешает с 1 HP и полными ОД)",
+    "type": "special",
+    "min_floor": 1,
+    "max_floor": 999
+  },
+  {
     "id": "potion_small",
     "name": "Слабое зелье (лечит 8 HP и +1 ОД)",
     "type": "potion",

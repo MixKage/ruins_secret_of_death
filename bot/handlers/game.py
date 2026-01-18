@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message, LabeledPrice
 
 from bot import db
 from bot.game.characters import DEFAULT_CHARACTER_ID, potion_action_label
@@ -46,13 +46,17 @@ from bot.keyboards import (
     forfeit_confirm_kb,
     tutorial_fail_kb,
     story_nav_kb,
+    second_chance_kb,
 )
+from bot.handlers.stars import STARS_CURRENCY, STARS_PROVIDER_TOKEN
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.progress import ensure_current_season, record_run_progress, xp_to_level
 from bot.story import build_chapter_caption, chapter_photo_path, max_unlocked_chapter, STORY_MAX_CHAPTERS
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
+
+SECOND_CHANCE_STARS = 2
 
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
@@ -144,6 +148,52 @@ async def _maybe_send_story_chapters(bot, chat_id: int, old_xp: int, state: dict
     for chapter in range(start, end + 1):
         await _send_story_chapter(bot, chat_id, chapter, max_chapter)
 
+async def _finalize_run_after_death(
+    callback: CallbackQuery,
+    user_id: int,
+    run_id: int,
+    state: dict,
+) -> None:
+    old_xp = await _get_user_xp(user_id)
+    await db.update_run(run_id, state)
+    await db.finish_run(run_id, state.get("floor", 0))
+    await db.update_user_max_floor(user_id, state.get("floor", 0))
+    await db.record_run_stats(user_id, state, died=True)
+    await record_run_progress(user_id, state, died=True)
+
+    await callback.answer()
+    if callback.message:
+        await safe_edit_text(callback.message, render_state(state), reply_markup=None)
+
+    season_id, _season_key = await ensure_current_season()
+    rank = await db.get_user_season_rank(user_id, season_id)
+    summary_text = _format_run_summary(state, rank)
+    await callback.bot.send_message(callback.from_user.id, summary_text)
+    if callback.from_user:
+        await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "Главное меню",
+        reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
+    )
+
+async def _offer_second_chance(
+    callback: CallbackQuery,
+    run_id: int,
+    state: dict,
+) -> None:
+    state["phase"] = "second_chance_offer"
+    _append_log(state, "Хотите выкупить амулет второго шанса за 2⭐ и продолжить бой?")
+    await db.update_run(run_id, state)
+    await callback.answer()
+    if callback.message:
+        await safe_edit_text(callback.message, render_state(state), reply_markup=second_chance_kb())
+    elif callback.from_user:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            render_state(state),
+            reply_markup=second_chance_kb(),
+        )
 
 
 async def _handle_forfeit(callback: CallbackQuery, user_id: int, run_id: int, state: dict) -> None:
@@ -296,6 +346,8 @@ def _markup_for_state(state: dict, is_admin: bool = False):
         if character_id == "executioner":
             strong_count = 0
         return potion_kb(small_count, medium_count, strong_count, character_id=character_id)
+    if state["phase"] == "second_chance_offer":
+        return second_chance_kb()
     return main_menu_kb(has_active_run=False, is_admin=is_admin)
 
 
@@ -529,28 +581,7 @@ async def battle_action(callback: CallbackQuery) -> None:
         return
 
     if state["phase"] == "dead":
-        old_xp = await _get_user_xp(user_row[0])
-        await db.update_run(run_id, state)
-        await db.finish_run(run_id, state.get("floor", 0))
-        await db.update_user_max_floor(user_row[0], state.get("floor", 0))
-        await db.record_run_stats(user_row[0], state, died=True)
-        await record_run_progress(user_row[0], state, died=True)
-
-        await callback.answer()
-        if callback.message:
-            await safe_edit_text(callback.message, render_state(state), reply_markup=None)
-
-        season_id, _season_key = await ensure_current_season()
-        rank = await db.get_user_season_rank(user_row[0], season_id)
-        summary_text = _format_run_summary(state, rank)
-        await callback.bot.send_message(callback.from_user.id, summary_text)
-        if callback.from_user:
-            await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
-        await callback.bot.send_message(
-            callback.from_user.id,
-            "Главное меню",
-            reply_markup=main_menu_kb(has_active_run=False, is_admin=is_admin_user(callback.from_user)),
-        )
+        await _offer_second_chance(callback, run_id, state)
         return
     else:
         await db.update_run(run_id, state)
@@ -588,6 +619,48 @@ async def forfeit_action(callback: CallbackQuery) -> None:
             return
         await _handle_forfeit(callback, user_row[0], run_id, state)
         return
+
+@router.callback_query(F.data.startswith("second_chance:"))
+async def second_chance_action(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    active = await db.get_active_run(user_row[0])
+    if not active:
+        await callback.answer("Активных забегов нет.", show_alert=True)
+        await _show_main_menu(callback)
+        return
+
+    run_id, state = active
+    if state.get("phase") != "second_chance_offer":
+        await callback.answer("Второй шанс сейчас недоступен.", show_alert=True)
+        await _send_state(callback, state, run_id)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    if action == "buy":
+        if callback.from_user is None:
+            return
+        payload = f"stars_second_chance:{callback.from_user.id}:{run_id}"
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title="Амулет второго шанса",
+            description="Мгновенно возрождает: 1 HP и полный запас ОД.",
+            payload=payload,
+            currency=STARS_CURRENCY,
+            prices=[LabeledPrice(label="Второй шанс", amount=SECOND_CHANCE_STARS)],
+            provider_token=STARS_PROVIDER_TOKEN,
+        )
+        await callback.answer()
+        return
+
+    if action == "decline":
+        state["phase"] = "dead"
+        await _finalize_run_after_death(callback, user_row[0], run_id, state)
+        return
+
+    await callback.answer("Неверное действие.", show_alert=True)
 
 @router.callback_query(F.data.startswith("tutorial:"))
 async def tutorial_menu_action(callback: CallbackQuery) -> None:
@@ -894,16 +967,9 @@ async def event_choice(callback: CallbackQuery) -> None:
     apply_event_choice(state, event_id)
 
     if state["phase"] == "dead":
-        old_xp = await _get_user_xp(user_row[0])
-        await db.update_run(run_id, state)
-        await db.finish_run(run_id, state.get("floor", 0))
-        await db.update_user_max_floor(user_row[0], state.get("floor", 0))
-        await db.record_run_stats(user_row[0], state, died=True)
-        await record_run_progress(user_row[0], state, died=True)
-        if callback.from_user:
-            await _maybe_send_story_chapters(callback.bot, callback.from_user.id, old_xp, state)
-    else:
-        await db.update_run(run_id, state)
+        await _offer_second_chance(callback, run_id, state)
+        return
 
+    await db.update_run(run_id, state)
     await callback.answer()
     await _send_state(callback, state, run_id)

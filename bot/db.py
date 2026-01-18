@@ -178,6 +178,17 @@ async def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS star_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                telegram_payment_charge_id TEXT UNIQUE NOT NULL,
+                provider_payment_charge_id TEXT,
+                action TEXT NOT NULL,
+                stars INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS season_history (
                 season_id INTEGER PRIMARY KEY,
                 season_number INTEGER NOT NULL,
@@ -614,6 +625,18 @@ async def has_star_purchase(telegram_payment_charge_id: str) -> bool:
         row = await cursor.fetchone()
         return bool(row)
 
+async def has_star_action(telegram_payment_charge_id: str) -> bool:
+    if not telegram_payment_charge_id:
+        return False
+    async with _connect() as db:
+        cursor = await _execute(
+            db,
+            "SELECT 1 FROM star_actions WHERE telegram_payment_charge_id = ?",
+            (telegram_payment_charge_id,),
+        )
+        row = await cursor.fetchone()
+        return bool(row)
+
 
 async def record_star_purchase(
     user_id: int,
@@ -638,6 +661,31 @@ async def record_star_purchase(
                 levels,
                 stars,
                 xp_added,
+            ),
+        )
+        await db.commit()
+
+async def record_star_action(
+    user_id: int,
+    telegram_payment_charge_id: str,
+    provider_payment_charge_id: str | None,
+    action: str,
+    stars: int,
+) -> None:
+    if not telegram_payment_charge_id:
+        return
+    async with _connect() as db:
+        await _execute(
+            db,
+            "INSERT OR IGNORE INTO star_actions "
+            "(user_id, telegram_payment_charge_id, provider_payment_charge_id, action, stars) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                user_id,
+                telegram_payment_charge_id,
+                provider_payment_charge_id,
+                action,
+                stars,
             ),
         )
         await db.commit()
@@ -1086,6 +1134,20 @@ async def get_active_tutorial(user_id: int) -> Optional[Tuple[int, Dict[str, Any
             return None
         run_id, state_json = row
         return run_id, json.loads(state_json)
+
+async def get_run_by_id(run_id: int) -> Optional[Tuple[int, bool, Dict[str, Any]]]:
+    async with _connect() as db:
+        cursor = await _execute(
+            db,
+            "SELECT user_id, is_active, state_json FROM runs WHERE id = ?",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        user_id, is_active, state_json = row
+        state = json.loads(state_json) if state_json else {}
+        return int(user_id), bool(is_active), state
 
 
 async def create_run(user_id: int, state: Dict[str, Any]) -> int:

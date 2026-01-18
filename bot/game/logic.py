@@ -94,6 +94,9 @@ ENEMY_DAMAGE_BUDGET_RATIO_POST_BOSS = 0.6
 LUCK_MAX = 0.7
 FULL_HEALTH_DAMAGE_BONUS = 0.2
 
+SECOND_CHANCE_AMULET_ID = "second_chance_amulet"
+SECOND_CHANCE_CHEST_CHANCE = 0.02
+
 AP_MAX_BASE_CAP = 4
 AP_MAX_STEP_PER_TIER = 2
 
@@ -217,6 +220,15 @@ def _refresh_turn_ap(state: Dict) -> None:
     _apply_executioner_last_breath_penalty(state)
     if state.get("berserk_meat_turns", 0) > 0:
         state["berserk_meat_turns"] = max(0, int(state.get("berserk_meat_turns", 0)) - 1)
+
+def apply_second_chance(state: Dict, note: str | None = None) -> None:
+    player = state.get("player", {})
+    if not player:
+        return
+    player["hp"] = 1
+    player["ap"] = _effective_ap_max(state)
+    state["phase"] = "battle"
+    _append_log(state, note or "Амулет второго шанса спасает вас: 1 HP и полные ОД.")
 
 def _apply_rune_guard_shield(state: Dict) -> None:
     if not _is_rune_guard(state):
@@ -444,6 +456,17 @@ def _magic_scroll_damage(state: Dict, player: Dict, ap_max: int | None = None) -
 def _is_luck_maxed(player: Dict) -> bool:
     return player.get("luck", 0.0) >= LUCK_MAX
 
+def _has_second_chance(player: Dict) -> bool:
+    return bool(player.get("second_chance"))
+
+def _can_drop_second_chance(pool: List[Dict], player: Dict | None) -> bool:
+    if not player or _has_second_chance(player):
+        return False
+    return any(
+        entry.get("type") == "upgrade" and entry.get("id") == SECOND_CHANCE_AMULET_ID
+        for entry in pool
+    )
+
 
 def _ap_max_cap_for_floor(floor: int) -> int:
     safe_floor = max(1, int(floor or 1))
@@ -661,6 +684,12 @@ def _filter_chest_loot_for_player(pool: List[Dict], player: Dict | None, floor: 
     filtered = pool
     if _is_luck_maxed(player):
         filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "lucky_amulet")]
+    if _has_second_chance(player):
+        filtered = [
+            item
+            for item in filtered
+            if not (item.get("type") == "upgrade" and item.get("id") == SECOND_CHANCE_AMULET_ID)
+        ]
     if _is_ap_max_capped(player, floor):
         filtered = [item for item in filtered if not (item.get("type") == "upgrade" and item.get("id") == "stamina")]
     if _is_armor_capped(player, floor):
@@ -686,6 +715,7 @@ def _filter_upgrades_for_player(
     filtered = upgrades
     if character_id == EXECUTIONER_ID:
         filtered = [item for item in filtered if item.get("id") != "potion_strong"]
+    filtered = [item for item in filtered if item.get("id") != SECOND_CHANCE_AMULET_ID]
     if _is_luck_maxed(player):
         filtered = [item for item in filtered if not (item.get("stat") == "luck" or item.get("id") == "lucky_amulet")]
     if _is_ap_max_capped(player, floor):
@@ -930,6 +960,7 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "evasion": 0.05,
         "power": 1,
         "luck": 0.2,
+        "second_chance": False,
         "weapon": weapon,
         "potions": [],
         "scrolls": [],
@@ -1674,6 +1705,15 @@ def enemy_phase(state: Dict) -> None:
                     "Неистовая живучесть: смертельный удар пережит, HP полностью восстановлено.",
                 )
                 continue
+            if _has_second_chance(player):
+                player["second_chance"] = False
+                player["hp"] = 1
+                player["ap"] = _effective_ap_max(state)
+                _append_log(
+                    state,
+                    "Амулет второго шанса раскалывается: вы выживаете с 1 HP и полными ОД.",
+                )
+                continue
             player["hp"] = 0
             state["phase"] = "dead"
             _append_log(state, "<b>Вы падаете без сознания.</b> Забег окончен.")
@@ -1763,6 +1803,18 @@ def _build_chest_reward(
         pool = [item for item in pool if item.get("id") != "potion_strong"]
     if not pool:
         return None
+    if _can_drop_second_chance(pool, player):
+        pool = [
+            item
+            for item in pool
+            if not (item.get("type") == "upgrade" and item.get("id") == SECOND_CHANCE_AMULET_ID)
+        ]
+        if random.random() < SECOND_CHANCE_CHEST_CHANCE:
+            upgrade = copy.deepcopy(get_upgrade_by_id(SECOND_CHANCE_AMULET_ID))
+            if upgrade:
+                return {"type": "upgrade", "item": upgrade}
+        if not pool:
+            return None
     entry = copy.deepcopy(random.choice(pool))
     item_type = entry.get("type")
     item_id = entry.get("id")
@@ -1892,6 +1944,14 @@ def apply_reward_item(state: Dict, reward: Dict) -> bool:
                 player["hp"] = min(player["hp_max"], player["hp"] + upgrade["amount"])
             _append_log(state, f"Апгрейд: <b>{upgrade['name']}</b>.")
             return True
+        if upgrade["type"] == "special":
+            if upgrade.get("id") == SECOND_CHANCE_AMULET_ID:
+                if _has_second_chance(player):
+                    _append_log(state, "Амулет второго шанса уже у вас.")
+                    return False
+                player["second_chance"] = True
+                _append_log(state, f"Вы нашли <b>{upgrade['name']}</b>.")
+                return True
         if upgrade["type"] == "potion":
             potion = upgrade
             if _is_executioner(state) and potion.get("id") == "potion_strong":
@@ -2281,6 +2341,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("Сытая ярость — точность +30%")
     if _is_berserk(state) and not state.get("berserk_second_wind_used"):
         status_notes.append("Неистовая живучесть — готово")
+    if _has_second_chance(player):
+        status_notes.append("Амулет второго шанса — готов")
     if state.get("cursed_ap_ratio"):
         status_notes.append("Проклятие — ОД 3/4")
     if effective_evasion != base_evasion:
