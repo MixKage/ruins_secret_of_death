@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery
 from bot import db
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.game.characters import CHARACTERS, DEFAULT_CHARACTER_ID, get_character
-from bot.keyboards import main_menu_kb, profile_kb
+from bot.keyboards import profile_kb
 from bot.progress import BADGES, ensure_current_season, progress_bar, season_label, xp_to_level
 from bot.utils.telegram import edit_or_send
 
@@ -97,18 +97,10 @@ def _potential_season_awards(
     return list(dict.fromkeys(awards))
 
 
-@router.callback_query(F.data == "menu:profile")
-async def profile_callback(callback: CallbackQuery) -> None:
-    user_row = await get_user_row(callback)
-    if not user_row:
-        return
-
-    user_id = user_row[0]
+async def build_profile_text(user_id: int, is_admin: bool) -> tuple[str, bool]:
     profile = await db.get_user_profile(user_id)
     if not profile:
-        await callback.answer()
-        await edit_or_send(callback, "<i>Профиль недоступен.</i>", reply_markup=main_menu_kb())
-        return
+        return "<i>Профиль недоступен.</i>", False
 
     season_id, season_key = await ensure_current_season()
     season_stats = await db.get_user_season_stats(user_id, season_id)
@@ -116,26 +108,22 @@ async def profile_callback(callback: CallbackQuery) -> None:
     rank = await db.get_user_season_rank(user_id, season_id)
     badges = await db.get_user_badges(user_id)
     season_rows = await db.get_season_stats_rows(season_id)
+    star_summary = await db.get_star_purchase_summary(user_id)
+    star_total = sum(entry.get("stars", 0) for entry in star_summary)
     last_closed = await db.get_last_season(ended_only=True)
     last_closed_key = last_closed[1] if last_closed else None
 
     total_kills = sum((total_stats.get("kills") or {}).values())
     season_kills = sum((season_stats.get("kills") or {}).values())
     hero_runs = total_stats.get("hero_runs", {}) or {}
-    star_summary = await db.get_star_purchase_summary(user_id)
-    unlocked_ids = await db.get_unlocked_heroes(user_id)
-    is_admin = is_admin_user(callback.from_user)
-
-    username = profile.get("username") or "Без имени"
-    created_at = _format_date(profile.get("created_at"))
-    xp = int(profile.get("xp", 0))
-    level, xp_current, xp_needed = xp_to_level(xp)
+    level, xp_current, xp_needed = xp_to_level(int(profile.get("xp", 0)))
     bar = progress_bar(xp_current, xp_needed)
     if is_admin:
         unlocked_set = set(CHARACTERS.keys())
         available_unlocks = 0
         next_required_level = None
     else:
+        unlocked_ids = await db.get_unlocked_heroes(user_id)
         unlocked_set = {DEFAULT_CHARACTER_ID}
         unlocked_set.update(unlocked_ids)
         unlocked_extra = max(0, len(unlocked_set) - 1)
@@ -148,7 +136,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
 
     seasonal_current, seasonal_history, permanent = _format_badges(
         badges,
-        last_closed_key or "__none__",
+        (last_closed_key or "__none__"),
     )
     potential_awards = _potential_season_awards(user_id, rank, season_stats, season_rows)
 
@@ -156,8 +144,8 @@ async def profile_callback(callback: CallbackQuery) -> None:
         "<b>Личный кабинет</b>",
         "<i>Руины помнят ваше имя.</i>",
         "",
-        f"<b>Имя:</b> {username}",
-        f"<b>В игре с:</b> {created_at}",
+        f"<b>Имя:</b> {profile.get('username') or 'Без имени'}",
+        f"<b>В игре с:</b> {_format_date(profile.get('created_at'))}",
         f"<b>Текущий сезон:</b> {season_label(season_key)}",
         f"<b>Место в рейтинге:</b> {('#' + str(rank)) if rank else '—'}",
         "",
@@ -175,6 +163,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
         f"- Сундуков открыто: {total_stats.get('chests_opened', 0)}",
         f"- Сокровищ найдено: {total_stats.get('treasures_found', 0)}",
     ]
+
     if hero_runs:
         lines.append("")
         lines.append("<b>Забеги по героям:</b>")
@@ -182,12 +171,17 @@ async def profile_callback(callback: CallbackQuery) -> None:
         for hero_id, count in sorted_runs:
             hero_name = get_character(hero_id).get("name", hero_id)
             lines.append(f"- {hero_name}: {count}")
+
     if available_unlocks > 0:
         lines.append("")
         lines.append(f"<b>Доступно открытий:</b> {available_unlocks}")
     elif next_required_level:
         lines.append("")
         lines.append(f"<b>Следующее открытие:</b> уровень {next_required_level}")
+    else:
+        lines.append("")
+        lines.append("<b>Все герои открыты.</b>")
+
     if star_summary:
         lines.append("")
         lines.append("<b>Stars:</b>")
@@ -222,10 +216,24 @@ async def profile_callback(callback: CallbackQuery) -> None:
 
     lines.append("")
     lines.append("<b>Вечные награды:</b>")
+    if star_total:
+        permanent.append(f"Куплено звезд: {star_total}")
     if permanent:
         lines.extend(f"- {name}" for name in permanent)
     else:
         lines.append("<i>Пока нет.</i>")
 
+    return "\n".join(lines), available_unlocks > 0
+
+
+@router.callback_query(F.data == "menu:profile")
+async def profile_callback(callback: CallbackQuery) -> None:
+    user_row = await get_user_row(callback)
+    if not user_row:
+        return
+
+    user_id = user_row[0]
+    is_admin = is_admin_user(callback.from_user)
+    lines, can_unlock = await build_profile_text(user_id, is_admin=is_admin)
     await callback.answer()
-    await edit_or_send(callback, "\n".join(lines), reply_markup=profile_kb(can_unlock=available_unlocks > 0))
+    await edit_or_send(callback, lines, reply_markup=profile_kb(can_unlock=can_unlock))

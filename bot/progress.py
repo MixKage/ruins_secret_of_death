@@ -80,17 +80,14 @@ def xp_to_level(xp: int) -> Tuple[int, int, int]:
 def xp_for_level_increase(current_xp: int, levels: int) -> int:
     if levels <= 0:
         return 0
-    level, current, need = xp_to_level(current_xp)
+    level, _current, _need = xp_to_level(current_xp)
     total = 0
     remaining = levels
-    progress = current
-    threshold = need
     while remaining > 0:
-        total += max(0, threshold - progress)
+        threshold = LEVEL_BASE_XP + LEVEL_STEP_XP * (level - 1)
+        total += threshold
         remaining -= 1
         level += 1
-        progress = 0
-        threshold = LEVEL_BASE_XP + LEVEL_STEP_XP * (level - 1)
     return total
 
 

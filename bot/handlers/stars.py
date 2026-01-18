@@ -7,8 +7,13 @@ from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import db
+from bot.handlers.helpers import is_admin_user
+from bot.handlers.heroes import _unlock_state
+from bot.handlers.profile import build_profile_text
+from bot.keyboards import profile_kb
 from bot.progress import ensure_current_season, xp_for_level_increase, xp_to_level
 from bot.utils.telegram import edit_or_send
+
 
 router = Router()
 
@@ -24,7 +29,7 @@ STARS_PACKAGES: Dict[int, Dict[str, int | str]] = {
 def _stars_text() -> str:
     return "\n".join(
         [
-            "<b>Stars / Уровни</b>",
+            "<b>Уровни за ⭐</b>",
             "Покупка повышает уровень ровно на выбранное число.",
             "XP начисляется автоматически и учитывается в сезоне.",
         ]
@@ -134,19 +139,20 @@ async def stars_success(message: Message) -> None:
     pack = STARS_PACKAGES.get(levels)
     if not pack:
         return
+    internal_user_id = await db.ensure_user(user_id, user.username)
     charge_id = payment.telegram_payment_charge_id
     if await db.has_star_purchase(charge_id):
         return
-    profile = await db.get_user_profile(user_id)
+    profile = await db.get_user_profile(internal_user_id)
     current_xp = int(profile.get("xp", 0)) if profile else 0
     xp_added = xp_for_level_increase(current_xp, levels)
     if xp_added <= 0:
         return
-    await db.add_user_xp(user_id, xp_added)
+    await db.add_user_xp(internal_user_id, xp_added)
     season_id, _ = await ensure_current_season()
-    await db.add_season_xp(user_id, season_id, xp_added)
+    await db.add_season_xp(internal_user_id, season_id, xp_added)
     await db.record_star_purchase(
-        user_id=user_id,
+        user_id=internal_user_id,
         telegram_payment_charge_id=charge_id,
         provider_payment_charge_id=payment.provider_payment_charge_id,
         levels=levels,
@@ -154,6 +160,25 @@ async def stars_success(message: Message) -> None:
         xp_added=xp_added,
     )
     new_level, _current, _need = xp_to_level(current_xp + xp_added)
-    await message.answer(
-        f"Stars: +{levels} ур. успешно. Новый уровень: <b>{new_level}</b>."
+    is_admin = is_admin_user(message.from_user)
+    unlocked_ids = await db.get_unlocked_heroes(internal_user_id)
+    _unlocked_set, available, required_level, _total_unlockable = _unlock_state(
+        new_level,
+        unlocked_ids,
+        is_admin=is_admin,
     )
+    if available > 0:
+        slot_note = "Вам доступен новый слот открытия персонажа."
+    elif required_level:
+        remaining = max(0, required_level - new_level)
+        slot_note = f"Осталось уровней до нового слота персонажей: N {remaining}."
+    else:
+        slot_note = "Все герои уже открыты."
+    await message.answer(
+        (
+            f"Спасибо, что поддержали наш проект! Поздравляем с успешной покупкой "
+            f"нового уровня (+{levels}). Теперь ваш уровень: <b>{new_level}</b>. {slot_note}"
+        )
+    )
+    profile_text, can_unlock = await build_profile_text(internal_user_id, is_admin=is_admin)
+    await message.answer(profile_text, reply_markup=profile_kb(can_unlock=can_unlock))

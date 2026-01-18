@@ -233,7 +233,7 @@ def rules_back_kb() -> InlineKeyboardMarkup:
 
 def profile_kb(can_unlock: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Stars / Уровни", callback_data="profile:stars")
+    builder.button(text="Уровни за ⭐", callback_data="profile:stars")
     if can_unlock:
         builder.button(text="Открыть персонажа", callback_data="heroes:menu:profile")
     builder.button(text="Меню", callback_data="menu:main")
