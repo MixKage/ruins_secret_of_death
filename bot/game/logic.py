@@ -894,7 +894,7 @@ def build_late_boss(player: Dict, floor: int, boss_name: str, character_id: str 
         "burn_damage": 0,
         "skip_turns": 0,
         "counted_dead": False,
-        "info": "Павший авантюрист, поднятый темной силой. Частично игнорирует уклонение. Каждый третий удар неизбежен.",
+        "info": "Павший авантюрист, поднятый темной силой. Полностью игнорирует уклонение. Каждый удар неизбежен.",
         "danger": "легендарная",
         "min_floor": floor,
         "max_floor": floor,
