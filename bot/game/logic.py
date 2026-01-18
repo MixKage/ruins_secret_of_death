@@ -2285,7 +2285,7 @@ def render_state(state: Dict) -> str:
         status_notes.append("Эхо убийства — готово")
     if _is_assassin(state):
         noun = potion_noun_plural(state.get("character_id"))
-        status_notes.append(f"Ядовитые настои — {noun} +2 HP")
+        status_notes.append(f"Мастер зельеварения — {noun} +2 HP")
     if is_duelist and duel_active:
         status_notes.append("Дуэль — урон +25%, точность +15%")
     if is_duelist and state.get("duel_turns_left"):
