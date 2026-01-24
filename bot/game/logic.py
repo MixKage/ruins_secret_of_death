@@ -14,6 +14,7 @@ from .characters import (
     DUELIST_ZONE_TURNS,
     EXECUTIONER_ID,
     EXECUTIONER_BLEED_CHANCE_BONUS,
+    RUNE_GUARD_ID,
     RUNE_GUARD_AP_BONUS,
     RUNE_GUARD_RETRIBUTION_PIERCE,
     RUNE_GUARD_RETRIBUTION_THRESHOLD,
@@ -215,6 +216,10 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["executioner_heal_count"] = 0
     state["duelist_blade_used"] = False
     state["duelist_parry_used"] = False
+    state["rune_guard_shield_used"] = False
+    state["rune_guard_throw_hits"] = 0
+    state["rune_guard_throw_active"] = False
+    state.pop("rune_guard_throw_armor", None)
     _purge_executioner_strong_potions(state)
     if _has_steady_breath(state, player):
         state["ap_bonus"] = RUNE_GUARD_AP_BONUS
@@ -246,6 +251,8 @@ def _apply_rune_guard_shield(state: Dict) -> None:
         return
     if state.get("rune_guard_shield_active"):
         return
+    if state.get("rune_guard_throw_active"):
+        return
     player = state.get("player", {})
     player["armor"] = float(player.get("armor", 0.0)) + RUNE_GUARD_SHIELD_BONUS
     state["rune_guard_shield_active"] = True
@@ -257,6 +264,16 @@ def _clear_rune_guard_shield(state: Dict) -> None:
     player = state.get("player", {})
     player["armor"] = max(0.0, float(player.get("armor", 0.0)) - RUNE_GUARD_SHIELD_BONUS)
     state["rune_guard_shield_active"] = False
+
+def _clear_rune_guard_throw(state: Dict) -> None:
+    if not state.get("rune_guard_throw_active"):
+        return
+    player = state.get("player", {})
+    stored = state.pop("rune_guard_throw_armor", None)
+    if stored is not None:
+        player["armor"] = float(stored)
+    state["rune_guard_throw_active"] = False
+    state["rune_guard_throw_hits"] = 0
 
 def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
     if not _is_rune_guard(state):
@@ -817,7 +834,10 @@ def _room_effect_description(character_id: str | None, room_id: str, late_floor:
             effect += f" и {medium_label}"
         return effect
     if room_id == "campfire":
-        effect = "+2-3 к макс. HP + "
+        if resolve_character_id(character_id) == RUNE_GUARD_ID:
+            effect = "+4 к макс. HP + "
+        else:
+            effect = "+2-3 к макс. HP + "
         effect += potion_label(character_id, "potion_small")
         if late_floor:
             medium_label = potion_label(character_id, "potion_medium")
@@ -1028,6 +1048,8 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "berserk_meat_turns": 0,
         "rune_guard_shield_active": False,
         "rune_guard_shield_used": False,
+        "rune_guard_throw_active": False,
+        "rune_guard_throw_hits": 0,
         "rune_guard_retribution_ready": False,
         "run_tasks": build_run_tasks(),
         "player": player,
@@ -1325,10 +1347,12 @@ def end_turn(state: Dict) -> None:
         return
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
+    _clear_rune_guard_throw(state)
     enemy_phase(state)
     _decrement_duel_zone(state)
     _tally_kills(state)
     _clear_rune_guard_shield(state)
+    state["rune_guard_shield_used"] = False
     if state.get("phase") != "dead":
         _refresh_turn_ap(state)
     check_battle_end(state)
@@ -1382,6 +1406,12 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     is_duelist = _is_duelist(state)
     assassin_shadow = _assassin_shadow_active(state, player)
     is_berserk = _is_berserk(state)
+    throw_active = bool(state.get("rune_guard_throw_active"))
+    throw_guaranteed = False
+    if throw_active:
+        hits = int(state.get("rune_guard_throw_hits", 0)) + 1
+        state["rune_guard_throw_hits"] = hits
+        throw_guaranteed = hits % 2 == 0
     hunter_first_shot = is_hunter and not state.get("hunter_first_shot_used")
     if hunter_first_shot:
         state["hunter_first_shot_used"] = True
@@ -1407,12 +1437,15 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         if assassin_shadow:
             hit = True
         elif is_rune_guard:
-            accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
-            hit = roll_hit(
-                base_accuracy + accuracy_bonus,
-                target["evasion"],
-                state.get("floor"),
-            )
+            if throw_guaranteed:
+                hit = True
+            else:
+                accuracy_bonus = _desperate_charge_accuracy_bonus(state, player)
+                hit = roll_hit(
+                    base_accuracy + accuracy_bonus,
+                    target["evasion"],
+                    state.get("floor"),
+                )
         else:
             hit = True if last_breath else roll_hit(
                 base_accuracy,
@@ -1672,7 +1705,10 @@ def use_rune_guard_shield(state: Dict) -> None:
         _append_log(state, "Поднять щиты доступно только Стражу рун.")
         return
     if state.get("rune_guard_shield_used"):
-        _append_log(state, "Поднять щиты можно только 1 раз за этаж.")
+        _append_log(state, "Поднять щиты можно только 1 раз за ход.")
+        return
+    if state.get("rune_guard_throw_active"):
+        _append_log(state, "Нельзя поднять щиты после отброса щитов в этом ходу.")
         return
     if state.get("rune_guard_shield_active"):
         _append_log(state, "Щиты уже подняты.")
@@ -1685,6 +1721,33 @@ def use_rune_guard_shield(state: Dict) -> None:
     player["ap"] = ap - 1
     state["rune_guard_shield_used"] = True
     _apply_rune_guard_shield(state)
+
+
+def use_rune_guard_throw(state: Dict) -> None:
+    if not _is_rune_guard(state):
+        _append_log(state, "Отбросить щиты доступно только Стражу рун.")
+        return
+    if state.get("rune_guard_shield_used"):
+        _append_log(state, "Отбросить щиты можно только 1 раз за ход.")
+        return
+    if state.get("rune_guard_shield_active"):
+        _append_log(state, "Нельзя отбросить щиты, пока они подняты.")
+        return
+    if state.get("rune_guard_throw_active"):
+        _append_log(state, "Щиты уже отброшены.")
+        return
+    player = state.get("player", {})
+    ap = int(player.get("ap", 0))
+    if ap < 1:
+        _append_log(state, "Недостаточно ОД, чтобы отбросить щиты.")
+        return
+    state["rune_guard_throw_armor"] = float(player.get("armor", 0.0))
+    player["armor"] = 0.0
+    player["ap"] = ap - 1
+    state["rune_guard_shield_used"] = True
+    state["rune_guard_throw_active"] = True
+    state["rune_guard_throw_hits"] = 0
+    _append_log(state, "Отбросить щиты: броня 0, каждый 2-й удар — 100% точности.")
 
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
@@ -2118,7 +2181,7 @@ def apply_event_choice(state: Dict, event_id: str) -> None:
             noun = potion_noun_genitive_plural(state.get("character_id"))
             _append_log(state, f"Нет места для {noun} — находка сгорает.")
     elif event_id == "campfire":
-        bonus = random.randint(2, 3)
+        bonus = 4 if _is_rune_guard(state) else random.randint(2, 3)
         player["hp_max"] += bonus
         player["hp"] += bonus
         _append_log(state, f"Костер укрепляет вас: <b>+{bonus}</b> к макс. HP.")
@@ -2383,6 +2446,8 @@ def render_state(state: Dict) -> str:
         status_notes.append("На последнем издыхании — точность 100%")
     if state.get("rune_guard_shield_active"):
         status_notes.append("Поднятые щиты — броня +2")
+    if state.get("rune_guard_throw_active"):
+        status_notes.append("Отброшены щиты — каждый 2-й удар 100% точности")
     if state.get("rune_guard_retribution_ready"):
         status_notes.append("Каменный Ответ — бронепробой +100%")
     if state.get("ap_bonus"):
@@ -2526,6 +2591,14 @@ def render_state(state: Dict) -> str:
                 f"<b>Дуэльная зона:</b> {charges}/{max_charges} "
                 f"(эффект {DUELIST_ZONE_TURNS} хода)",
             )
+        if _is_rune_guard(state):
+            lines.append(
+                "<b>Поднять щиты:</b> 1 ОД, броня +2 до конца хода врагов (1 раз за ход)."
+            )
+            lines.append(
+                "<b>Отбросить щиты:</b> 1 ОД, броня 0, каждый 2-й удар 100% точности (1 раз за ход)."
+            )
+            lines.append("<i>Нельзя использовать вместе в одном ходу.</i>")
         scrolls = player.get("scrolls", [])
         if scrolls:
             grouped = {}
