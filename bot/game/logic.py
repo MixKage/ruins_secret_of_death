@@ -247,11 +247,9 @@ def _apply_rune_guard_shield(state: Dict) -> None:
     if state.get("rune_guard_shield_active"):
         return
     player = state.get("player", {})
-    if player.get("ap", 0) > 0:
-        return
     player["armor"] = float(player.get("armor", 0.0)) + RUNE_GUARD_SHIELD_BONUS
     state["rune_guard_shield_active"] = True
-    _append_log(state, "Щит Рун: броня +2 до конца хода врагов.")
+    _append_log(state, "Поднять щиты: броня +2 до конца хода врагов.")
 
 def _clear_rune_guard_shield(state: Dict) -> None:
     if not state.get("rune_guard_shield_active"):
@@ -1029,6 +1027,7 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "berserk_second_wind_used": False,
         "berserk_meat_turns": 0,
         "rune_guard_shield_active": False,
+        "rune_guard_shield_used": False,
         "rune_guard_retribution_ready": False,
         "run_tasks": build_run_tasks(),
         "player": player,
@@ -1326,7 +1325,6 @@ def end_turn(state: Dict) -> None:
         return
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
-    _apply_rune_guard_shield(state)
     enemy_phase(state)
     _decrement_duel_zone(state)
     _tally_kills(state)
@@ -1668,6 +1666,26 @@ def use_duel_zone(state: Dict) -> None:
         f"Дуэльная зона: {target['name']} вызван на дуэль на {DUELIST_ZONE_TURNS} хода.",
     )
 
+
+def use_rune_guard_shield(state: Dict) -> None:
+    if not _is_rune_guard(state):
+        _append_log(state, "Поднять щиты доступно только Стражу рун.")
+        return
+    if state.get("rune_guard_shield_used"):
+        _append_log(state, "Поднять щиты можно только 1 раз за этаж.")
+        return
+    if state.get("rune_guard_shield_active"):
+        _append_log(state, "Щиты уже подняты.")
+        return
+    player = state.get("player", {})
+    ap = int(player.get("ap", 0))
+    if ap < 1:
+        _append_log(state, "Недостаточно ОД, чтобы поднять щиты.")
+        return
+    player["ap"] = ap - 1
+    state["rune_guard_shield_used"] = True
+    _apply_rune_guard_shield(state)
+
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
     enemies = _alive_enemies(state["enemies"])
@@ -1802,6 +1820,7 @@ def check_battle_end(state: Dict) -> None:
                 if dropped:
                     noun = potion_noun_genitive_plural(state.get("character_id"))
                     _append_log(state, f"Нет места для {noun} — награда сгорает.")
+        _clear_rune_guard_shield(state)
         state["phase"] = "reward"
         state["rewards"] = generate_rewards(
             state["floor"],
@@ -2206,6 +2225,7 @@ def advance_floor(state: Dict) -> None:
         state["duel_zone_charges"] = 0
     state["duel_turns_left"] = 0
     state["duel_target_idx"] = None
+    state["rune_guard_shield_used"] = False
     player = state["player"]
     _enforce_ap_max_cap(player, state["floor"])
     if is_any_boss_floor(state["floor"]):
@@ -2362,7 +2382,7 @@ def render_state(state: Dict) -> str:
     if last_breath_active:
         status_notes.append("На последнем издыхании — точность 100%")
     if state.get("rune_guard_shield_active"):
-        status_notes.append("Щит Рун — броня +2")
+        status_notes.append("Поднятые щиты — броня +2")
     if state.get("rune_guard_retribution_ready"):
         status_notes.append("Каменный Ответ — бронепробой +30%")
     if state.get("ap_bonus"):

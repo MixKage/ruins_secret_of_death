@@ -105,7 +105,11 @@ def potion_kb(
     builder.adjust(1)
     return builder.as_markup()
 
-def inventory_kb(scrolls: list, duel_zone_charges: int | None = None) -> InlineKeyboardMarkup:
+def inventory_kb(
+    scrolls: list,
+    duel_zone_charges: int | None = None,
+    rune_guard_shield_ready: bool = False,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     grouped = {}
     order = []
@@ -131,6 +135,8 @@ def inventory_kb(scrolls: list, duel_zone_charges: int | None = None) -> InlineK
         if duel_zone_charges is not None:
             label = f"{label} x{duel_zone_charges}"
         builder.button(text=label, callback_data="inventory:duel_zone")
+    if rune_guard_shield_ready:
+        builder.button(text="Поднять щиты", callback_data="inventory:rune_guard_shield")
     builder.button(text="Назад", callback_data="inventory:back")
     builder.adjust(1)
     return builder.as_markup()

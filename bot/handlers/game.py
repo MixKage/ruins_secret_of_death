@@ -28,6 +28,7 @@ from bot.game.logic import (
     tutorial_force_endturn,
     tutorial_use_scroll,
     use_duel_zone,
+    use_rune_guard_shield,
     TREASURE_REWARD_XP,
     LATE_BOSS_NAME_FALLBACK,
 )
@@ -361,7 +362,16 @@ def _markup_for_state(state: dict, is_admin: bool = False):
             if state.get("character_id") == "duelist"
             else None
         )
-        return inventory_kb(state["player"].get("scrolls", []), duel_zone_charges=duel_charges)
+        rune_guard_ready = (
+            state.get("character_id") == "rune_guard"
+            and not state.get("rune_guard_shield_used")
+            and not state.get("rune_guard_shield_active")
+        )
+        return inventory_kb(
+            state["player"].get("scrolls", []),
+            duel_zone_charges=duel_charges,
+            rune_guard_shield_ready=rune_guard_ready,
+        )
     if state["phase"] == "run_tasks":
         return run_tasks_kb()
     if state["phase"] == "potion_select":
@@ -882,6 +892,17 @@ async def inventory_action(callback: CallbackQuery) -> None:
             await _send_state(callback, state, run_id)
             return
         use_duel_zone(state)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+    if action == "rune_guard_shield":
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
+        if state.get("tutorial"):
+            await callback.answer("Недоступно в обучении.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        use_rune_guard_shield(state)
         await db.update_run(run_id, state)
         await callback.answer()
         await _send_state(callback, state, run_id)
