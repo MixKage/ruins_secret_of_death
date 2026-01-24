@@ -218,10 +218,10 @@ def leaderboard_kb(page: int) -> InlineKeyboardMarkup:
 def story_nav_kb(chapter: int, max_chapter: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if chapter > 1:
-        builder.button(text="Предыдущая", callback_data=f"story:chapter:{chapter - 1}")
+        builder.button(text="<-", callback_data=f"story:chapter:{chapter - 1}")
     builder.button(text="Меню", callback_data="menu:main")
     if chapter < max_chapter:
-        builder.button(text="Следующая", callback_data=f"story:chapter:{chapter + 1}")
+        builder.button(text="->", callback_data=f"story:chapter:{chapter + 1}")
     builder.adjust(3)
     return builder.as_markup()
 
