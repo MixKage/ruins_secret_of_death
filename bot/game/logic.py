@@ -269,7 +269,7 @@ def _maybe_trigger_rune_guard_retribution(state: Dict, damage: int) -> None:
         return
     if damage > hp_max * RUNE_GUARD_RETRIBUTION_THRESHOLD:
         state["rune_guard_retribution_ready"] = True
-        _append_log(state, "Каменный Ответ: следующий удар игнорирует 30% брони.")
+        _append_log(state, "Каменный Ответ: следующий удар игнорирует 100% брони.")
 
 
 def _apply_executioner_last_breath_penalty(state: Dict) -> None:
@@ -1438,7 +1438,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
             _append_log(state, f"Охотничья метка: цель {target['name']} отмечена.")
         if retribution_ready and armor_pierce_bonus > 0:
             state["rune_guard_retribution_ready"] = False
-            _append_log(state, "Каменный Ответ усиливает удар — броня частично игнорирована.")
+            _append_log(state, "Каменный Ответ усиливает удар — броня полностью игнорирована.")
         _apply_stone_skin(state, target)
         target_killed = target["hp"] <= 0
         if target_killed and state.get("duel_turns_left") and _duel_target(state) is None:
@@ -2384,7 +2384,7 @@ def render_state(state: Dict) -> str:
     if state.get("rune_guard_shield_active"):
         status_notes.append("Поднятые щиты — броня +2")
     if state.get("rune_guard_retribution_ready"):
-        status_notes.append("Каменный Ответ — бронепробой +30%")
+        status_notes.append("Каменный Ответ — бронепробой +100%")
     if state.get("ap_bonus"):
         status_notes.append("Стойкая Воля — ОД +1")
     if _is_berserk(state) and state.get("berserk_meat_turns", 0) > 0:

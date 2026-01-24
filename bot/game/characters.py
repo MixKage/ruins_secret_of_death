@@ -16,7 +16,7 @@ RUNE_GUARD_HP_BONUS = 6
 RUNE_GUARD_ARMOR_BONUS = 1.0
 RUNE_GUARD_EVASION_PENALTY = 0.05
 RUNE_GUARD_SHIELD_BONUS = 2.0
-RUNE_GUARD_RETRIBUTION_PIERCE = 0.3
+RUNE_GUARD_RETRIBUTION_PIERCE = 1.0
 RUNE_GUARD_RETRIBUTION_THRESHOLD = 0.25
 RUNE_GUARD_AP_BONUS = 1
 BERSERK_HP_BONUS = 10
@@ -124,7 +124,7 @@ CHARACTERS = {
         "description": [
             "HP +6, броня +1, уклонение -5%.",
             "Поднять щиты: 1 ОД, броня +2 до конца хода врагов (1 раз за этаж).",
-            "Каменный Ответ: получив удар >25% HP, следующий удар игнорирует 30% брони.",
+            "Каменный Ответ: получив удар >25% HP, следующий удар игнорирует 100% брони.",
             "Стойкая Воля: на полном HP в начале хода +1 ОД (не выше капа).",
             "Рывок Чести: при HP ≤ 1/3 1-я атака в ход стоит 0 ОД и точность +25%.",
         ],
