@@ -2388,9 +2388,10 @@ def render_state(state: Dict) -> str:
             lines.append("<i>Вы продолжаете спуск — руины бесконечны.</i>")
             lines.append("")
         lines.append("<b>Награды:</b>")
+        show_splash = not _is_duelist(state)
         for idx, reward in enumerate(state.get("rewards", []), start=1):
             item = reward["item"]
-            details = _format_reward_details(reward["type"], item)
+            details = _format_reward_details(reward["type"], item, show_splash=show_splash)
             lines.append(f"{idx}. <b>{item['name']}</b> {details}")
     elif state["phase"] == "boss_prep":
         intro_lines = state.get("boss_intro_lines") or BOSS_INTRO_LINES
@@ -2408,12 +2409,13 @@ def render_state(state: Dict) -> str:
         reward = state.get("treasure_reward")
         if reward:
             item = reward["item"]
-            details = _format_reward_details(reward["type"], item)
+            show_splash = not _is_duelist(state)
+            details = _format_reward_details(reward["type"], item, show_splash=show_splash)
             lines.append("<b>Сундук древних раскрывает находку:</b>")
             lines.append(f"<b>{item['name']}</b> {details}")
             if reward["type"] == "weapon":
                 current = player["weapon"]
-                current_details = _format_reward_details("weapon", current)
+                current_details = _format_reward_details("weapon", current, show_splash=show_splash)
                 lines.append("")
                 lines.append("<b>Сравнение оружия:</b>")
                 lines.append(f"Текущее: <b>{current['name']}</b> {current_details}")
@@ -2551,13 +2553,13 @@ def render_state(state: Dict) -> str:
 
     return "\n".join(lines)
 
-def _format_reward_details(reward_type: str, item: Dict) -> str:
+def _format_reward_details(reward_type: str, item: Dict, show_splash: bool = True) -> str:
     if reward_type == "weapon":
         parts = [f"урон {item['min_dmg']}-{item['max_dmg']}"]
         if item.get("accuracy_bonus"):
             sign = "+" if item["accuracy_bonus"] > 0 else ""
             parts.append(f"точность {sign}{int(round(item['accuracy_bonus'] * 100))}%")
-        if item.get("splash_ratio"):
+        if show_splash and item.get("splash_ratio"):
             parts.append(f"сплэш {int(round(item['splash_ratio'] * 100))}%")
         if item.get("bleed_chance"):
             chance = int(round(item["bleed_chance"] * 100))
