@@ -3,10 +3,13 @@ from __future__ import annotations
 from typing import Optional
 
 import asyncio
+import logging
 
 from aiogram.client.bot import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+
+logger = logging.getLogger(__name__)
 
 
 async def safe_edit_text(
@@ -22,6 +25,7 @@ async def safe_edit_text(
 
 
 async def _notify_retry_delay(callback: CallbackQuery | None, retry_after: float) -> None:
+    logger.info("Telegram rate limit: waiting %.2f seconds before retry", retry_after)
     if callback:
         try:
             await callback.answer(

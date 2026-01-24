@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import json
 from html import escape
 from pathlib import Path
@@ -24,6 +25,7 @@ from bot.progress import (
     season_month_label,
 )
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 BALANCE_BROADCAST_KEY = "balance_update_v1"
@@ -122,6 +124,11 @@ async def balance_update(message: Message) -> None:
             await mark_broadcast_sent(user_id, BALANCE_BROADCAST_KEY)
             sent += 1
         except TelegramRetryAfter as exc:
+            logger.info(
+                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
+                exc.retry_after,
+                telegram_id,
+            )
             await asyncio.sleep(exc.retry_after)
             try:
                 await _send_balance_update(message, telegram_id, photo_exists)
@@ -164,6 +171,11 @@ async def season_update(message: Message) -> None:
             await mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
             sent += 1
         except TelegramRetryAfter as exc:
+            logger.info(
+                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
+                exc.retry_after,
+                telegram_id,
+            )
             await asyncio.sleep(exc.retry_after)
             try:
                 await _send_season_update(message, telegram_id, photo_exists)
@@ -195,6 +207,11 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
                 await bot.send_message(telegram_id, SERVER_CRASH_TEXT)
             sent += 1
         except TelegramRetryAfter as exc:
+            logger.info(
+                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
+                exc.retry_after,
+                telegram_id,
+            )
             await asyncio.sleep(exc.retry_after)
             try:
                 if photo_exists:
@@ -324,6 +341,11 @@ async def send_season_summary_broadcast(
             await bot.send_message(telegram_id, "\n".join(lines))
             sent += 1
         except TelegramRetryAfter as exc:
+            logger.info(
+                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
+                exc.retry_after,
+                telegram_id,
+            )
             await asyncio.sleep(exc.retry_after)
             try:
                 await bot.send_message(telegram_id, "\n".join(lines))
