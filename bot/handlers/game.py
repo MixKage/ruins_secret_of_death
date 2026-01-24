@@ -190,7 +190,7 @@ async def _offer_second_chance(
 ) -> None:
     state["phase"] = "second_chance_offer"
     state["second_chance_offer_type"] = "buy"
-    _append_log(state, "Хотите выкупить амулет второго шанса за 2⭐ и продолжить бой?")
+    _append_log(state, "Хотите выкупить амулет второго шанса за 5⭐ и продолжить бой?")
     await db.update_run(run_id, state)
     await callback.answer()
     if callback.message:

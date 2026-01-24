@@ -20,7 +20,7 @@ router = Router()
 
 STARS_CURRENCY = "XTR"
 STARS_PROVIDER_TOKEN = ""
-SECOND_CHANCE_STARS = 2
+SECOND_CHANCE_STARS = 5
 STARS_PACKAGES: Dict[int, Dict[str, int | str]] = {
     1: {"stars": 50, "label": "Уровень +1"},
     5: {"stars": 200, "label": "Уровень +5"},

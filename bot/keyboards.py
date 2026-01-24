@@ -72,7 +72,7 @@ def tutorial_fail_kb() -> InlineKeyboardMarkup:
 
 def second_chance_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Второй шанс за 2⭐", callback_data="second_chance:buy")
+    builder.button(text="Второй шанс за 5⭐", callback_data="second_chance:buy")
     builder.button(text="Отказаться", callback_data="second_chance:decline")
     builder.adjust(1)
     return builder.as_markup()
