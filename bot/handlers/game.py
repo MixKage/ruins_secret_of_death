@@ -28,6 +28,7 @@ from bot.game.logic import (
     tutorial_force_endturn,
     tutorial_use_scroll,
     use_duel_zone,
+    use_hunter_trap,
     use_rune_guard_throw,
     use_rune_guard_shield,
     TREASURE_REWARD_XP,
@@ -375,11 +376,18 @@ def _markup_for_state(state: dict, is_admin: bool = False):
             and not state.get("rune_guard_throw_active")
             and not state.get("rune_guard_shield_active")
         )
+        hunter_trap_ready = (
+            state.get("character_id") == "hunter"
+            and not state.get("hunter_trap_used")
+            and not state.get("hunter_trap_active")
+            and not state.get("boss_kind")
+        )
         return inventory_kb(
             state["player"].get("scrolls", []),
             duel_zone_charges=duel_charges,
             rune_guard_shield_ready=rune_guard_ready,
             rune_guard_throw_ready=rune_guard_throw_ready,
+            hunter_trap_ready=hunter_trap_ready,
         )
     if state["phase"] == "run_tasks":
         return run_tasks_kb()
@@ -923,6 +931,17 @@ async def inventory_action(callback: CallbackQuery) -> None:
             await _send_state(callback, state, run_id)
             return
         use_rune_guard_throw(state)
+        await db.update_run(run_id, state)
+        await callback.answer()
+        await _send_state(callback, state, run_id)
+        return
+    if action == "hunter_trap":
+        state["phase"] = "tutorial" if state.get("tutorial") else "battle"
+        if state.get("tutorial"):
+            await callback.answer("Недоступно в обучении.", show_alert=True)
+            await _send_state(callback, state, run_id)
+            return
+        use_hunter_trap(state)
         await db.update_run(run_id, state)
         await callback.answer()
         await _send_state(callback, state, run_id)

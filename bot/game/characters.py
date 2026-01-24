@@ -40,6 +40,7 @@ HUNTER_HP_BONUS = 2
 HUNTER_EVASION_BONUS = 0.05
 HUNTER_ACCURACY_BONUS = 0.10
 HUNTER_MARK_DAMAGE_BONUS = 0.25
+HUNTER_MARK_ACCURACY_BONUS = 0.50
 HUNTER_FIRST_SHOT_BONUS = 0.10
 EXECUTIONER_HP_BONUS = 4
 EXECUTIONER_ARMOR_BONUS = 1.0
@@ -163,10 +164,11 @@ CHARACTERS = {
         "description": [
             "HP +2, броня без изменений, уклонение +5%, точность +10%.",
             "Охотничья метка: первая атака по цели накладывает метку.",
-            "Добыча: по цели с меткой урон +25%.",
-            "Перенос метки: при убийстве цели метка переходит на случайного врага из первых ceil(N/2).",
+            "Добыча: по цели с меткой урон +25% и точность +50%.",
+            "Перенос метки: при убийстве цели метка переходит на случайного врага из первой половины группы.",
             "Гон по следу: первое убийство за ход восстанавливает 1 ОД.",
             "Выверенный выстрел: первая атака в ход получает +10% точности.",
+            "Поставить ловушку: 1 ОД, 1 раз за ход, в начале хода врагов наносит 50% max HP верхнему противнику (не работает на боссах).",
             "На последнем издыхании: при HP ≤ 1/3 точность 100%.",
         ],
     },
@@ -470,6 +472,12 @@ def _assassin_potion_bonus(state: Dict) -> int:
 def _hunter_mark_bonus(state: Dict, target: Dict) -> float:
     if _is_hunter(state) and target.get("hunter_mark"):
         return HUNTER_MARK_DAMAGE_BONUS
+    return 0.0
+
+
+def _hunter_mark_accuracy_bonus(state: Dict, target: Dict) -> float:
+    if _is_hunter(state) and target.get("hunter_mark"):
+        return HUNTER_MARK_ACCURACY_BONUS
     return 0.0
 
 

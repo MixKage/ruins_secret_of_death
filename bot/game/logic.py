@@ -44,6 +44,7 @@ from .characters import (
     _is_hunter,
     _is_rune_guard,
     _hunter_first_shot_bonus,
+    _hunter_mark_accuracy_bonus,
     _hunter_mark_bonus,
     apply_character_starting_stats,
     get_character,
@@ -211,6 +212,8 @@ def _refresh_turn_ap(state: Dict) -> None:
     state["assassin_echo_used"] = False
     state["hunter_first_shot_used"] = False
     state["hunter_kill_used"] = False
+    state["hunter_trap_used"] = False
+    state["hunter_trap_active"] = False
     state["executioner_bleed_used"] = False
     state["executioner_onslaught_used"] = False
     state["executioner_heal_count"] = 0
@@ -1031,6 +1034,8 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "assassin_echo_used": False,
         "hunter_first_shot_used": False,
         "hunter_kill_used": False,
+        "hunter_trap_used": False,
+        "hunter_trap_active": False,
         "executioner_bleed_used": False,
         "executioner_onslaught_used": False,
         "executioner_heal_count": 0,
@@ -1298,6 +1303,7 @@ def build_enemy_info_text(
             assassin_shadow = _assassin_shadow_active(state_stub, player)
             accuracy_bonus = _desperate_charge_accuracy_bonus(state_stub, player)
             accuracy_bonus += _duelist_duel_accuracy_bonus(state_stub, duel_active)
+            accuracy_bonus += _hunter_mark_accuracy_bonus(state_stub, enemy)
             player_accuracy = player.get("accuracy", 0.0) + weapon.get("accuracy_bonus", 0.0) + accuracy_bonus
             enemy_evasion = _effective_evasion(enemy.get("evasion", 0.0), floor)
             if _has_last_breath(state_stub, player) or assassin_shadow:
@@ -1416,6 +1422,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
     if hunter_first_shot:
         state["hunter_first_shot_used"] = True
     hunter_accuracy_bonus = _hunter_first_shot_bonus(state) if hunter_first_shot else 0.0
+    mark_accuracy_bonus = _hunter_mark_accuracy_bonus(state, target)
     duelist_accuracy_bonus = _duelist_duel_accuracy_bonus(state, duel_active)
     blade_bonus = _duelist_blade_pierce_bonus(state, state.get("duelist_blade_used", False))
     berserk_meat_bonus = BERSERK_MEAT_ACCURACY_BONUS if state.get("berserk_meat_turns", 0) > 0 else 0.0
@@ -1426,6 +1433,7 @@ def player_attack(state: Dict, log_kills: bool = True) -> None:
         player["accuracy"]
         + weapon["accuracy_bonus"]
         + hunter_accuracy_bonus
+        + mark_accuracy_bonus
         + duelist_accuracy_bonus
         + berserk_meat_bonus
     )
@@ -1749,6 +1757,30 @@ def use_rune_guard_throw(state: Dict) -> None:
     state["rune_guard_throw_hits"] = 0
     _append_log(state, "Отбросить щиты: броня 0, каждый 2-й удар — 100% точности.")
 
+
+def use_hunter_trap(state: Dict) -> None:
+    if not _is_hunter(state):
+        _append_log(state, "Поставить ловушку доступно только Охотнику.")
+        return
+    if state.get("boss_kind"):
+        _append_log(state, "Поставить ловушку нельзя в бою с боссом.")
+        return
+    if state.get("hunter_trap_used"):
+        _append_log(state, "Поставить ловушку можно только 1 раз за ход.")
+        return
+    if state.get("hunter_trap_active"):
+        _append_log(state, "Ловушка уже установлена.")
+        return
+    player = state.get("player", {})
+    ap = int(player.get("ap", 0))
+    if ap < 1:
+        _append_log(state, "Недостаточно ОД, чтобы поставить ловушку.")
+        return
+    player["ap"] = ap - 1
+    state["hunter_trap_used"] = True
+    state["hunter_trap_active"] = True
+    _append_log(state, "Поставить ловушку: сработает в начале хода врагов по верхнему противнику.")
+
 def enemy_phase(state: Dict) -> None:
     player = state["player"]
     enemies = _alive_enemies(state["enemies"])
@@ -1763,6 +1795,18 @@ def enemy_phase(state: Dict) -> None:
             enemy["hp"] -= enemy.get("burn_damage", 0)
             enemy["burn_turns"] -= 1
             _append_log(state, f"{enemy['name']} горит и теряет {enemy.get('burn_damage', 0)} HP.")
+
+    if state.get("hunter_trap_active"):
+        target = _first_alive(state["enemies"])
+        if target is not None:
+            trap_damage = max(1, int(round(target.get("max_hp", 0) * 0.5)))
+            target["hp"] -= trap_damage
+            _apply_stone_skin(state, target)
+            _append_log(
+                state,
+                f"Ловушка срабатывает: {target['name']} получает {trap_damage} урона.",
+            )
+        state["hunter_trap_active"] = False
 
     _tally_kills(state)
     _hunter_transfer_mark(state)
@@ -2590,6 +2634,11 @@ def render_state(state: Dict) -> str:
             lines.append(
                 f"<b>Дуэльная зона:</b> {charges}/{max_charges} "
                 f"(эффект {DUELIST_ZONE_TURNS} хода)",
+            )
+        if _is_hunter(state):
+            lines.append(
+                "<b>Поставить ловушку:</b> 1 ОД, 1 раз за ход, в начале хода врагов "
+                "наносит 50% max HP верхнему противнику (не работает на боссах)."
             )
         if _is_rune_guard(state):
             lines.append(

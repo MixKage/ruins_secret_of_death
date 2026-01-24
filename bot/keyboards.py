@@ -110,6 +110,7 @@ def inventory_kb(
     duel_zone_charges: int | None = None,
     rune_guard_shield_ready: bool = False,
     rune_guard_throw_ready: bool = False,
+    hunter_trap_ready: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     grouped = {}
@@ -140,6 +141,8 @@ def inventory_kb(
         builder.button(text="Поднять щиты", callback_data="inventory:rune_guard_shield")
     if rune_guard_throw_ready:
         builder.button(text="Отбросить щиты", callback_data="inventory:rune_guard_throw")
+    if hunter_trap_ready:
+        builder.button(text="Поставить ловушку", callback_data="inventory:hunter_trap")
     builder.button(text="Назад", callback_data="inventory:back")
     builder.adjust(1)
     return builder.as_markup()

@@ -134,6 +134,8 @@ def new_tutorial_state() -> Dict:
         "boss_kind": None,
         "boss_name": None,
         "boss_intro_lines": None,
+        "hunter_trap_used": False,
+        "hunter_trap_active": False,
         "rune_guard_shield_active": False,
         "rune_guard_shield_used": False,
         "rune_guard_throw_active": False,
