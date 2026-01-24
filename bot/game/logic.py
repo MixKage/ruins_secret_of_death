@@ -5,8 +5,12 @@ from typing import Dict, List, Tuple
 from .characters import (
     CHARACTERS,
     DUELIST_PARRY_COUNTER_RATIO,
-    DUELIST_PARRY_REDUCTION,
     DUELIST_ZONE_CHARGES,
+    DUELIST_PARRY_REDUCTION,
+    DUELIST_PARRY_REDUCTION_BOSS,
+    DUELIST_PARRY_REDUCTION_VIRTUOSO,
+    DUELIST_VIRTUOSO_FLOOR,
+    DUELIST_VIRTUOSO_ZONE_CHARGES,
     DUELIST_ZONE_TURNS,
     EXECUTIONER_ID,
     EXECUTIONER_BLEED_CHANCE_BONUS,
@@ -357,6 +361,29 @@ def _duelist_duel_active(state: Dict) -> bool:
         return True
     alive = _alive_enemies(state.get("enemies", []))
     return len(alive) == 1
+
+
+def _duelist_virtuoso_active(state: Dict) -> bool:
+    return _is_duelist(state) and int(state.get("floor", 0)) >= DUELIST_VIRTUOSO_FLOOR
+
+
+def _duelist_max_zone_charges(state: Dict) -> int:
+    return DUELIST_VIRTUOSO_ZONE_CHARGES if _duelist_virtuoso_active(state) else DUELIST_ZONE_CHARGES
+
+
+def _is_boss_enemy(state: Dict, enemy: Dict | None = None) -> bool:
+    if state.get("boss_kind"):
+        return True
+    boss_ids = {"necromancer", "fallen_hero", "necromancer_daughter"}
+    return bool(enemy and enemy.get("id") in boss_ids)
+
+
+def _duelist_parry_reduction(state: Dict, enemy: Dict | None = None) -> float:
+    if _duelist_virtuoso_active(state):
+        return DUELIST_PARRY_REDUCTION_VIRTUOSO
+    if _is_boss_enemy(state, enemy):
+        return DUELIST_PARRY_REDUCTION_BOSS
+    return DUELIST_PARRY_REDUCTION
 
 
 def _decrement_duel_zone(state: Dict) -> None:
@@ -990,7 +1017,11 @@ def new_run_state(character_id: str | None = None) -> Dict:
         "executioner_onslaught_used": False,
         "executioner_heal_count": 0,
         "executioner_last_breath_turns": 0,
-        "duel_zone_charges": DUELIST_ZONE_CHARGES if _is_duelist({"character_id": chosen_id}) else 0,
+        "duel_zone_charges": (
+            _duelist_max_zone_charges({"character_id": chosen_id, "floor": 1})
+            if _is_duelist({"character_id": chosen_id})
+            else 0
+        ),
         "duel_turns_left": 0,
         "duel_target_idx": None,
         "duelist_blade_used": False,
@@ -1688,7 +1719,8 @@ def enemy_phase(state: Dict) -> None:
             damage = _enemy_damage_to_player(enemy, player, state.get("floor", 1))
             if _is_duelist(state) and not state.get("duelist_parry_used"):
                 state["duelist_parry_used"] = True
-                reduced_damage = max(0, int(round(damage * (1.0 - DUELIST_PARRY_REDUCTION))))
+                reduction = _duelist_parry_reduction(state, enemy)
+                reduced_damage = max(0, int(round(damage * (1.0 - reduction))))
                 prevented = max(0, damage - reduced_damage)
                 damage = reduced_damage
                 if prevented > 0:
@@ -2169,7 +2201,7 @@ def advance_floor(state: Dict) -> None:
     state["show_info"] = False
     state["cursed_ap_ratio"] = None
     if _is_duelist(state):
-        state["duel_zone_charges"] = DUELIST_ZONE_CHARGES
+        state["duel_zone_charges"] = _duelist_max_zone_charges(state)
     else:
         state["duel_zone_charges"] = 0
     state["duel_turns_left"] = 0
@@ -2291,6 +2323,8 @@ def render_state(state: Dict) -> str:
     if is_duelist and state.get("duel_turns_left"):
         turns_left = int(state.get("duel_turns_left", 0))
         status_notes.append(f"Дуэльная зона — {turns_left} ход.")
+    if is_duelist and _duelist_virtuoso_active(state):
+        status_notes.append("Виртуоз — дуэльная зона 3 заряда, парирование 60%")
     if is_duelist and not state.get("duelist_parry_used"):
         status_notes.append("Парирование — готово")
     if is_duelist and not state.get("duelist_blade_used"):
@@ -2466,9 +2500,10 @@ def render_state(state: Dict) -> str:
             magic_damage = int(config.get("scroll_hit", magic_damage))
         lines.append(f"<b>Магический урон:</b> {magic_damage} | <b>Стоимость:</b> 1 ОД")
         if _is_duelist(state):
+            max_charges = _duelist_max_zone_charges(state)
             charges = int(state.get("duel_zone_charges", 0))
             lines.append(
-                f"<b>Дуэльная зона:</b> {charges}/{DUELIST_ZONE_CHARGES} "
+                f"<b>Дуэльная зона:</b> {charges}/{max_charges} "
                 f"(эффект {DUELIST_ZONE_TURNS} хода)",
             )
         scrolls = player.get("scrolls", [])
@@ -2525,7 +2560,8 @@ def render_state(state: Dict) -> str:
         lines.append("")
         parry_multiplier = 1.0
         if len(enemies) == 1 and _is_duelist(state) and not state.get("duelist_parry_used"):
-            parry_multiplier = max(0.0, 1.0 - DUELIST_PARRY_REDUCTION)
+            reduction = _duelist_parry_reduction(state, enemies[0])
+            parry_multiplier = max(0.0, 1.0 - reduction)
         single_max_display = max(1, int(round(total_max * parry_multiplier)))
         if len(enemies) == 1:
             lines.append(
