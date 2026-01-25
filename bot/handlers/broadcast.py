@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 BALANCE_BROADCAST_KEY = "balance_update_v1"
-SEASON_BROADCAST_KEY = "season_update_v1"
+SEASON_BROADCAST_KEY = "season_update_v2"
 BROADCAST_KEY = BALANCE_BROADCAST_KEY
 
 BALANCE_UPDATE_TEXT = (
@@ -47,14 +47,17 @@ BALANCE_UPDATE_TEXT = (
 )
 
 SEASON_UPDATE_TEXT = (
-    "<b>Season Update: руины вспоминают героев</b>\n"
-    "Добавлен сезонный прогресс и личный кабинет героя.\n"
-    "- Ежемесячные сезоны сбрасывают рейтинговую таблицу 1-го числа.\n"
-    "- Сезонные награды за топовые места в рейтинге, а также (убийства, сундуки, сокровища).\n"
-    "- Опыт за забеги и награды, уровни и прогресс-бар.\n"
-    "- Личный кабинет с вашей историей, статистикой и коллекцией наград.\n"
-    "- Расширенные правила и справки по механикам.\n\n"
-    "<i>Сезон открыт. Время вернуть себе имя в руинах.</i>"
+    "<b>Season 2: руины открывают новые пути</b>\n"
+    "Сезон обновлен — готовьтесь к новым тактикам.\n"
+    "- В игре теперь <b>7 уникальных героев</b> наделенных собственной техникой боя.\n"
+    "- Добавлено обучение для новых путников руин.\n"
+    "- Добавлены сюжетные главы и новые противники.\n"
+    "- Добавлены испытания руин, дающие за выполнение XP.\n"
+    "- Добавлен амулет второго шанса и другие улучшения.\n"    
+    "- Обновлен внутриигровой баланс.\n"
+    "- Появилась возможность поддержать проект.\n"
+    "- Улучшены правила и справка, подсказки стали понятнее.\n\n"
+    "<i>Сезон 2 открыт. Выберите героя и верните себе имя в руинах.</i>"
 )
 
 SERVER_CRASH_TEXT = (
@@ -65,7 +68,7 @@ SERVER_CRASH_TEXT = (
 )
 
 BALANCE_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "balance_update.jpg"
-SEASON_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "season_update.jpg"
+SEASON_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "season2.jpg"
 SERVER_CRASH_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "server_crashed.jpg"
 
 
