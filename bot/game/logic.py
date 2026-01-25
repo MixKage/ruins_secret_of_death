@@ -2679,7 +2679,7 @@ def render_state(state: Dict) -> str:
         lines.append("<b>Испытания руин:</b>")
         completed, total, _xp = run_tasks_summary(state)
         lines.append(f"<b>Прогресс:</b> {completed}/{total}")
-        lines.append("<b>Награда:</b> +20 XP за задачу")
+        lines.append("<b>Награда:</b> +10 XP за задачу")
         lines.append("")
         task_lines = run_tasks_lines(state)
         if task_lines:

@@ -10,47 +10,54 @@ from .data import get_scroll_by_id, get_upgrade_by_id
 from .effects import _apply_freeze
 from .items import _add_potion, _add_scroll
 
-TUTORIAL_TOTAL_STEPS = 10
+TUTORIAL_TOTAL_STEPS = 12
 TUTORIAL_SCENE_NAME = "Плац у казармы"
 TUTORIAL_DEFAULT_CONFIG = {
-    "player_hit": 6,
-    "scroll_hit": 8,
-    "enemy_hit": 8,
-    "last_breath_hp": 9,
+    "player_hit": 7,
+    "scroll_hit": 4,
+    "enemy_hit": 15,
 }
 TUTORIAL_STEP_ACTIONS = {
     1: "info",
-    2: "attack",
-    3: "attack_all",
-    4: "endturn",
-    5: "potion",
-    6: "scroll",
-    7: "endturn",
-    8: None,
-    9: "attack",
-    10: "attack",
+    2: "info",
+    3: "attack",
+    4: "attack_all",
+    5: "endturn",
+    6: "potion",
+    7: "attack",
+    8: "endturn",
+    9: "scroll",
+    10: "endturn",
+    11: "attack",
+    12: "attack",
 }
 TUTORIAL_STEP_PROMPTS = {
     1: "Нажмите «Справка», чтобы изучить противника.",
-    2: "Атакуйте один раз (1 ОД).",
-    3: "Используйте «Атаковать на все ОД».",
-    4: "Завершите ход — враг ответит.",
-    5: "Используйте малое зелье.",
-    6: "Откройте инвентарь и примените ледяной свиток.",
-    7: "Завершите ход — враг пропустит его.",
-    9: "Атакуйте (1 ОД).",
-    10: "Добейте врага ещё одной атакой.",
+    2: "Скройте справку, чтобы продолжить бой.",
+    3: "Атакуйте один раз (1 ОД).",
+    4: "Используйте «Атаковать на все ОД».",
+    5: "Завершите ход — враг ответит.",
+    6: "Рекрут опустошил ОД. Выпейте малое зелье, чтобы восстановить +1 ОД.",
+    7: "Потратьте восстановленный ОД на атаку (1 ОД).",
+    8: "Завершите ход — враг прижмет вас к грани.",
+    9: "Вы на последнем издыхании. Используйте ледяной свиток.",
+    10: "Завершите ход — враг пропустит его.",
+    11: "Рыцарь на грани всегда попадает. Атакуйте (1 ОД).",
+    12: "Добейте врага ещё одной атакой.",
 }
 TUTORIAL_STEP_HINTS = {
     1: "Сначала нажмите «Справка».",
-    2: "Сейчас нужна атака на 1 ОД.",
-    3: "Нажмите «Атаковать на все ОД».",
-    4: "Завершите ход.",
-    5: "Используйте зелье, чтобы восстановиться.",
-    6: "Нужно применить ледяной свиток из инвентаря.",
-    7: "Завершите ход, чтобы увидеть эффект льда.",
-    9: "Атакуйте врага (1 ОД).",
-    10: "Добейте врага атакой (1 ОД).",
+    2: "Нужно снова нажать «Справка», чтобы скрыть свойства.",
+    3: "Сейчас нужна атака на 1 ОД.",
+    4: "Нажмите «Атаковать на все ОД».",
+    5: "Завершите ход.",
+    6: "Используйте зелье, чтобы восстановить HP и +1 ОД.",
+    7: "Потратьте ОД на атаку по врагу.",
+    8: "Завершите ход.",
+    9: "Нужно применить ледяной свиток из инвентаря.",
+    10: "Завершите ход, чтобы увидеть эффект льда.",
+    11: "Атакуйте врага (1 ОД).",
+    12: "Добейте врага атакой (1 ОД).",
 }
 
 
@@ -92,8 +99,8 @@ def new_tutorial_state() -> Dict:
     enemy = {
         "id": "tutorial_recruit",
         "name": "Учебный рекрут у казармы",
-        "hp": 34,
-        "max_hp": 34,
+        "hp": 30,
+        "max_hp": 30,
         "attack": 8,
         "armor": 0.0,
         "armor_pierce": 0.0,
@@ -118,6 +125,7 @@ def new_tutorial_state() -> Dict:
         "tutorial_step": 1,
         "tutorial_scene": TUTORIAL_SCENE_NAME,
         "tutorial_config": dict(TUTORIAL_DEFAULT_CONFIG),
+        "tutorial_miss_steps": [3, 7],
         "tutorial_flags": {},
         "desperate_charge_used": False,
         "player": player,
@@ -175,6 +183,18 @@ def _tutorial_log_step_prompt(state: Dict) -> None:
     flags["last_prompt_step"] = step
 
 
+def _set_tutorial_alert(state: Dict, text: str) -> None:
+    if text:
+        state["tutorial_alert"] = text
+
+
+def _append_tutorial_hint(state: Dict, text: str) -> None:
+    if not text:
+        return
+    _append_log(state, f"<i>{text}</i>")
+    _set_tutorial_alert(state, text)
+
+
 def tutorial_force_endturn(state: Dict) -> bool:
     return bool(state.get("tutorial")) and tutorial_expected_action(state) == "endturn"
 
@@ -189,37 +209,37 @@ def tutorial_apply_action(state: Dict, action: str) -> str:
     if action == "info":
         state["show_info"] = not state.get("show_info", False)
         if tutorial_expected_action(state) != "info":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         _tutorial_advance(state)
         return "continue"
     if action == "attack":
         if tutorial_expected_action(state) != "attack":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         return _tutorial_attack(state, hits=1)
     if action == "attack_all":
         if tutorial_expected_action(state) != "attack_all":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         return _tutorial_attack(state, hits=2, consume_all=True)
     if action == "endturn":
         if tutorial_expected_action(state) != "endturn":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         return _tutorial_end_turn(state)
     if action == "potion":
         if tutorial_expected_action(state) != "potion":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         return _tutorial_use_potion(state)
     if action == "inventory":
         if tutorial_expected_action(state) != "scroll":
-            _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+            _append_tutorial_hint(state, tutorial_hint(state))
             return "continue"
         state["phase"] = "inventory"
         return "continue"
-    _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+    _append_tutorial_hint(state, tutorial_hint(state))
     return "continue"
 
 
@@ -227,10 +247,10 @@ def tutorial_use_scroll(state: Dict, scroll_id: str | None) -> str:
     if not state.get("tutorial"):
         return "ignored"
     if tutorial_expected_action(state) != "scroll":
-        _append_log(state, f"<i>{tutorial_hint(state)}</i>")
+        _append_tutorial_hint(state, tutorial_hint(state))
         return "continue"
     if scroll_id != "scroll_ice":
-        _append_log(state, "<i>Нужен ледяной свиток.</i>")
+        _append_tutorial_hint(state, "Нужен ледяной свиток.")
         return "continue"
     player = state["player"]
     scrolls = player.get("scrolls", [])
@@ -240,7 +260,7 @@ def tutorial_use_scroll(state: Dict, scroll_id: str | None) -> str:
             index = idx
             break
     if index is None:
-        _append_log(state, "<i>Свиток не найден.</i>")
+        _append_tutorial_hint(state, "Свиток не найден.")
         return "continue"
     scroll = scrolls.pop(index)
     player["ap"] = max(0, int(player.get("ap", 0)) - 1)
@@ -266,12 +286,20 @@ def _tutorial_attack(state: Dict, hits: int, consume_all: bool = False) -> str:
     target = _first_alive(state.get("enemies", []))
     if not target:
         return "continue"
+    step = int(state.get("tutorial_step", 1))
+    miss_steps = state.get("tutorial_miss_steps", [])
+    should_miss = not consume_all and step in miss_steps
     if consume_all:
         player["ap"] = 0
         _append_log(state, f"Вы атакуете на все ОД: {hits} удара по {damage} урона.")
     else:
         player["ap"] = max(0, int(player.get("ap", 0)) - 1)
-        _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
+        if should_miss:
+            _append_log(state, "Вы промахиваетесь.")
+            _append_log(state, "<i>Точность повышает шанс попадания, но не гарантирует его.</i>")
+            total_damage = 0
+        else:
+            _append_log(state, f"Вы наносите {damage} урона по {target['name']}.")
     target["hp"] = max(0, target["hp"] - total_damage)
     _tutorial_advance(state)
     return _tutorial_check_completion(state)
@@ -285,13 +313,33 @@ def _tutorial_end_turn(state: Dict) -> str:
     if enemy is None:
         return "continue"
     config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    if step == 4:
+    if step == 5:
         damage = int(config.get("enemy_hit", 8))
         player["hp"] = max(0, player["hp"] - damage)
         _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
+        player["ap"] = 0
+        _append_log(state, "Опустошение: ОД обнулены, нужен новый импульс.")
         if player["hp"] <= 0:
             return _tutorial_fail(state, "Вы пали в учебной схватке.")
-    elif step == 7:
+    elif step == 8:
+        damage = int(config.get("enemy_hit", 8))
+        player["hp"] = max(0, player["hp"] - damage)
+        _append_log(state, f"{enemy['name']} бьет вас на {damage} урона.")
+        ap_max = int(player.get("ap_max", 1))
+        player["ap"] = max(0, ap_max - 1)
+        _append_log(state, "Удар сбивает ритм: ОД восстановлены не полностью.")
+        if player["hp"] <= 0:
+            return _tutorial_fail(state, "Вы пали в учебной схватке.")
+        flags = state.setdefault("tutorial_flags", {})
+        if not flags.get("last_breath_shown"):
+            hp_max = max(1, int(player.get("hp_max", 1)))
+            if player["hp"] <= hp_max * (1 / 3):
+                _append_log(
+                    state,
+                    "<b>Вы на последнем издыхании.</b> Рыцарь на грани получает 100% точности.",
+                )
+                flags["last_breath_shown"] = True
+    elif step == 10:
         if enemy.get("skip_turns", 0) > 0:
             enemy["skip_turns"] = max(0, enemy.get("skip_turns", 0) - 1)
             _append_log(state, f"{enemy['name']} скован льдом и пропускает ход.")
@@ -320,27 +368,7 @@ def _tutorial_use_potion(state: Dict) -> str:
 def _tutorial_advance(state: Dict) -> None:
     step = int(state.get("tutorial_step", 1)) + 1
     state["tutorial_step"] = step
-    if step == 8:
-        _tutorial_enter_last_breath(state)
-        state["tutorial_step"] = step + 1
     _tutorial_log_step_prompt(state)
-
-
-def _tutorial_enter_last_breath(state: Dict) -> None:
-    flags = state.setdefault("tutorial_flags", {})
-    if flags.get("last_breath_shown"):
-        return
-    player = state.get("player", {})
-    config = state.get("tutorial_config", TUTORIAL_DEFAULT_CONFIG)
-    forced_hp = int(config.get("last_breath_hp", 9))
-    player["hp"] = max(1, min(int(player.get("hp_max", 1)), forced_hp))
-    _append_log(
-        state,
-        "<i>Удар наставника для демонстрации вашей силы снимает Вам 21 HP.</i>\n"
-        "<b>Вы на последнем издыхании.</b> Когда Ваше HP ≤ 1/3 от максимального, точность становится 100%. "
-        "Ваш стиль боя раскрывается именно здесь.",
-    )
-    flags["last_breath_shown"] = True
 
 
 def _tutorial_check_completion(state: Dict) -> str:

@@ -60,6 +60,16 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
 
+def _pop_tutorial_alert(state: dict) -> str | None:
+    return state.pop("tutorial_alert", None)
+
+
+async def _answer_tutorial_alert(callback: CallbackQuery, alert: str | None) -> None:
+    if alert:
+        await callback.answer(alert, show_alert=True)
+        return
+    await callback.answer()
+
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
     if callback.message:
@@ -94,7 +104,8 @@ async def _complete_tutorial(callback: CallbackQuery, user_id: int, run_id: int,
     await db.finish_tutorial_run(run_id)
     text = (
         "<b>Учебный рекрут повержен.</b>\n"
-        "Вы освоили ключевые механики и готовы к руинам."
+        "Вы освоили ключевые механики Рыцаря и готовы к руинам.\n"
+        "Совет: загляните в <b>Правила</b>, чтобы освежить детали."
     )
     is_admin = is_admin_user(callback.from_user)
     if callback.message:
@@ -554,15 +565,17 @@ async def battle_action(callback: CallbackQuery) -> None:
     if state.get("tutorial"):
         result = tutorial_apply_action(state, action)
         if state.get("tutorial_failed") or result == "fail":
+            alert = _pop_tutorial_alert(state)
             await db.update_run(run_id, state)
-            await callback.answer()
+            await _answer_tutorial_alert(callback, alert)
             await _show_tutorial_failed(callback, state)
             return
         if state.get("tutorial_completed") or result == "complete":
             await _complete_tutorial(callback, user_row[0], run_id, state)
             return
+        alert = _pop_tutorial_alert(state)
         await db.update_run(run_id, state)
-        await callback.answer()
+        await _answer_tutorial_alert(callback, alert)
         await _send_state(callback, state, run_id)
         return
     if state["phase"] != "battle":
@@ -875,18 +888,20 @@ async def inventory_action(callback: CallbackQuery) -> None:
         state["phase"] = "tutorial" if state.get("tutorial") else "battle"
         if state.get("tutorial"):
             result = tutorial_use_scroll(state, scroll_id)
-            if state.get("tutorial_failed") or result == "fail":
-                await db.update_run(run_id, state)
-                await callback.answer()
-                await _show_tutorial_failed(callback, state)
-                return
-            if state.get("tutorial_completed") or result == "complete":
-                await _complete_tutorial(callback, user_row[0], run_id, state)
-                return
+        if state.get("tutorial_failed") or result == "fail":
+            alert = _pop_tutorial_alert(state)
             await db.update_run(run_id, state)
-            await callback.answer()
-            await _send_state(callback, state, run_id)
+            await _answer_tutorial_alert(callback, alert)
+            await _show_tutorial_failed(callback, state)
             return
+        if state.get("tutorial_completed") or result == "complete":
+            await _complete_tutorial(callback, user_row[0], run_id, state)
+            return
+        alert = _pop_tutorial_alert(state)
+        await db.update_run(run_id, state)
+        await _answer_tutorial_alert(callback, alert)
+        await _send_state(callback, state, run_id)
+        return
         scrolls = state.get("player", {}).get("scrolls", [])
         index = None
         for idx, scroll in enumerate(scrolls):
@@ -958,15 +973,17 @@ async def inventory_action(callback: CallbackQuery) -> None:
             scroll_id = scrolls[index].get("id") if index < len(scrolls) else None
             result = tutorial_use_scroll(state, scroll_id)
             if state.get("tutorial_failed") or result == "fail":
+                alert = _pop_tutorial_alert(state)
                 await db.update_run(run_id, state)
-                await callback.answer()
+                await _answer_tutorial_alert(callback, alert)
                 await _show_tutorial_failed(callback, state)
                 return
             if state.get("tutorial_completed") or result == "complete":
                 await _complete_tutorial(callback, user_row[0], run_id, state)
                 return
+            alert = _pop_tutorial_alert(state)
             await db.update_run(run_id, state)
-            await callback.answer()
+            await _answer_tutorial_alert(callback, alert)
             await _send_state(callback, state, run_id)
             return
         player_use_scroll(state, index)
