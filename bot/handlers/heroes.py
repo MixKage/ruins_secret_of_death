@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Tuple
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, FSInputFile
+from pathlib import Path
 
 from bot import db
 from bot.game.characters import CHARACTERS, DEFAULT_CHARACTER_ID, get_character
@@ -15,6 +16,11 @@ from bot.utils.telegram import edit_or_send
 router = Router()
 
 UNLOCK_STEP = 5
+HERO_PHOTO_DIR = Path(__file__).resolve().parents[2] / "assets" / "heroes"
+
+
+def _hero_photo_path(hero_id: str) -> Path:
+    return HERO_PHOTO_DIR / f"{hero_id}.jpg"
 
 
 def _unlock_state(
@@ -103,7 +109,23 @@ async def _show_hero_detail(callback: CallbackQuery, user_id: int, hero_id: str,
         allow_stars=not is_unlocked and available <= 0,
         source=source,
     )
-    await edit_or_send(callback, "\n".join(lines), reply_markup=markup)
+    text = "\n".join(lines)
+    photo_path = _hero_photo_path(hero_id)
+    if photo_path.exists():
+        chat_id = callback.from_user.id if callback.from_user else None
+        if chat_id is None and callback.message:
+            chat_id = callback.message.chat.id
+        if chat_id is not None:
+            photo = FSInputFile(str(photo_path))
+            await callback.bot.send_photo(
+                chat_id,
+                photo,
+                caption=text,
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            return
+    await edit_or_send(callback, text, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("heroes:menu:"))
