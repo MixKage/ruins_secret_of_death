@@ -284,6 +284,7 @@ def hero_detail_kb(
     is_unlocked: bool,
     can_unlock: bool,
     required_level: int | None,
+    allow_stars: bool = False,
     source: str = "menu",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -295,6 +296,8 @@ def hero_detail_kb(
         level = int(required_level or 0)
         label = f"Требуется уровень {level}" if level > 0 else "Требуется уровень"
         builder.button(text=label, callback_data="hero:locked")
+        if allow_stars:
+            builder.button(text="Уровни за ⭐", callback_data="profile:stars")
     builder.button(text="Назад", callback_data=f"heroes:menu:{source}")
     builder.button(text="Меню", callback_data="menu:main")
     builder.adjust(1)

@@ -93,13 +93,14 @@ async def _show_hero_detail(callback: CallbackQuery, user_id: int, hero_id: str,
             lines.append("<i>Можно открыть этого героя сейчас.</i>")
         elif required_level:
             lines.append(f"<i>Требуется уровень {required_level}.</i>")
-            lines.append("<i>Уровень можно поднять через Stars в профиле.</i>")
+            lines.append("<i>Уровень можно поднять через Stars.</i>")
 
     markup = hero_detail_kb(
         hero_id=hero_id,
         is_unlocked=is_unlocked,
         can_unlock=not is_unlocked and available > 0,
         required_level=required_level,
+        allow_stars=not is_unlocked and available <= 0,
         source=source,
     )
     await edit_or_send(callback, "\n".join(lines), reply_markup=markup)
@@ -162,8 +163,9 @@ async def hero_unlock_callback(callback: CallbackQuery) -> None:
         return
     if available <= 0:
         required_level = required_level or UNLOCK_STEP
-        await callback.answer(f"Требуется уровень {required_level}.", show_alert=True)
-        await _show_hero_detail(callback, user_row[0], hero_id, source)
+        await callback.answer()
+        from bot.handlers.stars import stars_menu_callback
+        await stars_menu_callback(callback)
         return
     await db.unlock_hero(user_row[0], hero_id)
     await callback.answer("Герой открыт.")
