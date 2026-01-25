@@ -68,7 +68,7 @@ def chapter_text(chapter: int) -> str:
 
 
 def chapter_photo_path(chapter: int) -> Path:
-    return STORY_ASSETS_DIR / f"h{chapter}.jpg"
+    return STORY_ASSETS_DIR / f"h{chapter}-rus.jpg"
 
 
 def apply_slash_style(text: str) -> str:
