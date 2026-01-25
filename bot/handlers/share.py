@@ -42,7 +42,8 @@ def _format_share_message(state: dict, max_floor: int, rank: int | None) -> str:
     if rank is not None:
         lines.append("")
         lines.append(f"<b>Кстати, я занимаю {rank} место в рейтинге.</b>")
-
+    
+    lines.append("\nby <a href=\"https://adc-web.ru\">ADC STUDIO</a>")
     return "\n".join(lines)
 
 
