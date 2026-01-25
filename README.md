@@ -142,6 +142,7 @@ python -m bot.main
 ```bash
 BOT_TOKEN="<token>"
 ADMIN_IDS="123,456"
+RUINS_DB_PATH="/data/ruins.db"
 ```
 
 1) Создать файл базы на хосте:
@@ -156,7 +157,7 @@ touch ruins.db
 docker compose up -d --build
 ```
 
-1) База данных хранится на хосте в `./ruins.db` (файл сохраняется при перезапуске контейнера).
+1) База данных хранится на хосте в `./ruins.db` (можно указать любой путь и смонтировать его в `/data/ruins.db`).
 
 ## Структура данных (SQLite)
 

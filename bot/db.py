@@ -3,12 +3,14 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
-DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
+DB_PATH = Path(os.getenv("RUINS_DB_PATH", "")).expanduser() if os.getenv("RUINS_DB_PATH") else _DEFAULT_DB_PATH
 SQLITE_TIMEOUT = 5.0
 SQLITE_BUSY_TIMEOUT_MS = 5000
 SQLITE_WRITE_RETRIES = 3

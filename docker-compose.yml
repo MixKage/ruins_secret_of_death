@@ -7,5 +7,6 @@ services:
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_IDS: ${ADMIN_IDS}
+      RUINS_DB_PATH: /data/ruins.db
     volumes:
-      - ./ruins.db:/app/ruins.db
+      - ./ruins.db:/data/ruins.db
