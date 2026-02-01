@@ -1,11 +1,13 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 import os
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 import asyncpg
+from asyncpg import exceptions as pg_exc
 
 DB_DSN_ENV = ("DATABASE_URL", "POSTGRES_DSN", "POSTGRES_URL")
 PG_POOL_MIN = max(1, int(os.getenv("PG_POOL_MIN", "1")))
@@ -15,8 +17,11 @@ _POOL: asyncpg.Pool | None = None
 _POOL_LOCK = asyncio.Lock()
 PIONEER_BADGE_ID = "first_pioneer"
 PIONEER_BADGE_CUTOFF = "2026-01-01"
+PIONEER_BADGE_CUTOFF_DATE = date.fromisoformat(PIONEER_BADGE_CUTOFF)
 SEASON0_KEY = "2025-12"
 SEASON0_START = "2025-12-20"
+SEASON0_START_DATE = date.fromisoformat(SEASON0_START)
+SEASON0_START_TS = datetime.combine(SEASON0_START_DATE, time.min)
 SEASON0_BACKFILL_SETTING = "season0_backfill_done"
 TREASURE_REWARD_XP = 5
 
@@ -29,6 +34,40 @@ def _get_db_dsn() -> str:
     raise RuntimeError("DATABASE_URL is not set")
 
 
+def _dsn_with_db(dsn: str, db_name: str) -> str:
+    parsed = urlparse(dsn)
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError("DATABASE_URL is invalid")
+    path = f"/{db_name}"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", parsed.query, ""))
+
+
+def _extract_db_name(dsn: str) -> str:
+    parsed = urlparse(dsn)
+    db_name = parsed.path.lstrip("/")
+    return db_name or "postgres"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+async def _ensure_database_exists(dsn: str) -> None:
+    target_db = _extract_db_name(dsn)
+    admin_dsn = _dsn_with_db(dsn, "postgres")
+    conn = await asyncpg.connect(
+        dsn=admin_dsn,
+        command_timeout=PG_COMMAND_TIMEOUT,
+        server_settings={"timezone": "UTC"},
+    )
+    try:
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", target_db)
+        if not exists:
+            await conn.execute(f"CREATE DATABASE {_quote_ident(target_db)}")
+    finally:
+        await conn.close()
+
+
 async def _get_pool() -> asyncpg.Pool:
     global _POOL
     if _POOL:
@@ -36,13 +75,24 @@ async def _get_pool() -> asyncpg.Pool:
     async with _POOL_LOCK:
         if _POOL:
             return _POOL
-        _POOL = await asyncpg.create_pool(
-            dsn=_get_db_dsn(),
-            min_size=PG_POOL_MIN,
-            max_size=PG_POOL_MAX,
-            command_timeout=PG_COMMAND_TIMEOUT,
-            server_settings={"timezone": "UTC"},
-        )
+        dsn = _get_db_dsn()
+        try:
+            _POOL = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=PG_POOL_MIN,
+                max_size=PG_POOL_MAX,
+                command_timeout=PG_COMMAND_TIMEOUT,
+                server_settings={"timezone": "UTC"},
+            )
+        except pg_exc.InvalidCatalogNameError:
+            await _ensure_database_exists(dsn)
+            _POOL = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=PG_POOL_MIN,
+                max_size=PG_POOL_MAX,
+                command_timeout=PG_COMMAND_TIMEOUT,
+                server_settings={"timezone": "UTC"},
+            )
         return _POOL
 
 
@@ -330,7 +380,7 @@ async def init_db() -> None:
             "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
             "SELECT id, ?, 1, NULL FROM users WHERE created_at::date < ?::date "
             "ON CONFLICT DO NOTHING",
-            (PIONEER_BADGE_ID, PIONEER_BADGE_CUTOFF),
+            (PIONEER_BADGE_ID, PIONEER_BADGE_CUTOFF_DATE),
         )
 
 
@@ -411,7 +461,7 @@ async def _backfill_season0_stats(db: _PgConn) -> None:
         cursor = await _execute(
             db,
             "INSERT INTO seasons (season_key, started_at) VALUES (?, ?) RETURNING id",
-            (SEASON0_KEY, SEASON0_START),
+            (SEASON0_KEY, SEASON0_START_TS),
         )
         row = await cursor.fetchone()
         season_id = int(row[0]) if row else 0
@@ -419,7 +469,7 @@ async def _backfill_season0_stats(db: _PgConn) -> None:
     cursor = await _execute(db, 
         "SELECT user_id, state_json, max_floor FROM runs "
         "WHERE is_active = 0 AND is_tutorial = 0 AND started_at >= ?",
-        (SEASON0_START,),
+        (SEASON0_START_TS,),
     )
     rows = await cursor.fetchall()
     if not rows:
@@ -1179,7 +1229,7 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
                 "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
                 "SELECT ?, ?, 1, NULL WHERE ?::date < ?::date "
                 "ON CONFLICT DO NOTHING",
-                (user_id, PIONEER_BADGE_ID, created_at, PIONEER_BADGE_CUTOFF),
+                (user_id, PIONEER_BADGE_ID, created_at, PIONEER_BADGE_CUTOFF_DATE),
             )
         await db.commit()
         return user_id

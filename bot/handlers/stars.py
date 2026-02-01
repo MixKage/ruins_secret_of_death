@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Tuple
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
@@ -13,6 +13,7 @@ from bot.handlers.profile import build_profile_text
 from bot.keyboards import profile_kb
 from bot.game.logic import render_state
 from bot.progress import ensure_current_season, xp_for_level_increase, xp_to_level
+from bot.pricing import SECOND_CHANCE_STARS, STARS_PACKAGES, get_pack_price, get_second_chance_price
 from bot.utils.telegram import edit_or_send
 
 
@@ -20,11 +21,6 @@ router = Router()
 
 STARS_CURRENCY = "XTR"
 STARS_PROVIDER_TOKEN = ""
-SECOND_CHANCE_STARS = 5
-STARS_PACKAGES: Dict[int, Dict[str, int | str]] = {
-    1: {"stars": 50, "label": "Уровень +1"},
-    5: {"stars": 200, "label": "Уровень +5"},
-}
 
 
 def _stars_text() -> str:
@@ -41,7 +37,7 @@ def _stars_kb():
     builder = InlineKeyboardBuilder()
     for levels in sorted(STARS_PACKAGES):
         pack = STARS_PACKAGES[levels]
-        stars = int(pack["stars"])
+        stars = get_pack_price(levels)
         label = str(pack["label"])
         builder.button(
             text=f"{stars}⭐ — {label}",
@@ -92,7 +88,7 @@ async def stars_buy(callback: CallbackQuery) -> None:
     if not pack:
         await callback.answer("Пакет недоступен.", show_alert=True)
         return
-    stars = int(pack["stars"])
+    stars = get_pack_price(levels)
     label = str(pack["label"])
     payload = f"stars_levels:{callback.from_user.id}:{levels}"
     await callback.bot.send_invoice(
@@ -123,13 +119,15 @@ async def stars_pre_checkout(query: PreCheckoutQuery) -> None:
         if not pack:
             await query.answer(ok=False, error_message="Пакет недоступен.")
             return
-        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(pack["stars"]):
+        expected = get_pack_price(value)
+        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(expected):
             await query.answer(ok=False, error_message="Неверная сумма оплаты.")
             return
         await query.answer(ok=True)
         return
     if kind == "second_chance":
-        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(SECOND_CHANCE_STARS):
+        expected = get_second_chance_price()
+        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(expected):
             await query.answer(ok=False, error_message="Неверная сумма оплаты.")
             return
         user_row = await db.get_user_by_telegram(user_id)
@@ -188,7 +186,7 @@ async def stars_success(message: Message) -> None:
             telegram_payment_charge_id=charge_id,
             provider_payment_charge_id=payment.provider_payment_charge_id,
             levels=levels,
-            stars=int(pack["stars"]),
+            stars=get_pack_price(levels),
             xp_added=xp_added,
         )
         new_level, _current, _need = xp_to_level(current_xp + xp_added)
@@ -241,7 +239,7 @@ async def stars_success(message: Message) -> None:
             telegram_payment_charge_id=charge_id,
             provider_payment_charge_id=payment.provider_payment_charge_id,
             action="second_chance",
-            stars=SECOND_CHANCE_STARS,
+            stars=get_second_chance_price(),
         )
         is_admin = is_admin_user(message.from_user)
         await message.answer(
