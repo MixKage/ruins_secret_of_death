@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
@@ -13,14 +13,20 @@ from bot.utils.telegram import edit_or_send
 router = Router()
 
 
-def _format_date(value: str | None) -> str:
+def _format_date(value: str | datetime | date | None) -> str:
     if not value:
         return "—"
-    try:
-        dt = datetime.fromisoformat(value)
-        return dt.strftime("%d.%m.%Y")
-    except ValueError:
-        return value
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y")
+    if isinstance(value, date):
+        return value.strftime("%d.%m.%Y")
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt.strftime("%d.%m.%Y")
+        except ValueError:
+            return value
+    return str(value)
 
 
 def _format_badges(badges, season_key: str) -> tuple[list[str], list[str], list[str]]:

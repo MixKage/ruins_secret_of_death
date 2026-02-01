@@ -22,3 +22,9 @@ def get_admin_ids() -> set[int]:
         except ValueError:
             continue
     return ids
+
+
+def is_test_mode() -> bool:
+    raw = os.getenv("BOT_TEST_MODE", "") or os.getenv("TEST_MODE", "")
+    raw = raw.strip().lower()
+    return raw in {"1", "true", "yes", "on"}

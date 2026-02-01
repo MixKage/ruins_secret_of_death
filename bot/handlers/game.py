@@ -52,7 +52,11 @@ from bot.keyboards import (
     second_chance_kb,
     second_chance_owned_kb,
 )
-from bot.handlers.stars import SECOND_CHANCE_STARS, STARS_CURRENCY, STARS_PROVIDER_TOKEN
+from bot.handlers.stars import (
+    STARS_CURRENCY,
+    STARS_PROVIDER_TOKEN,
+    get_second_chance_price,
+)
 from bot.handlers.helpers import get_user_row, is_admin_user
 from bot.progress import ensure_current_season, record_run_progress, xp_to_level
 from bot.story import build_chapter_caption, chapter_photo_path, max_unlocked_chapter, STORY_MAX_CHAPTERS
@@ -204,7 +208,10 @@ async def _offer_second_chance(
 ) -> None:
     state["phase"] = "second_chance_offer"
     state["second_chance_offer_type"] = "buy"
-    _append_log(state, "Хотите выкупить амулет второго шанса за 5⭐ и продолжить бой?")
+    _append_log(
+        state,
+        f"Хотите выкупить амулет второго шанса за {get_second_chance_price()}⭐ и продолжить бой?",
+    )
     await db.update_run(run_id, state)
     await callback.answer()
     if callback.message:
@@ -725,7 +732,7 @@ async def second_chance_action(callback: CallbackQuery) -> None:
             description="Мгновенно возрождает: 1 HP и полный запас ОД.",
             payload=payload,
             currency=STARS_CURRENCY,
-            prices=[LabeledPrice(label="Второй шанс", amount=SECOND_CHANCE_STARS)],
+            prices=[LabeledPrice(label="Второй шанс", amount=get_second_chance_price())],
             provider_token=STARS_PROVIDER_TOKEN,
         )
         await callback.answer()
