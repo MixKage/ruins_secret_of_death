@@ -143,14 +143,15 @@ python -m bot.main
 
 ## Docker
 
-1) Создать файл `.env` в корне проекта:
+1) Скопировать `.env.example` в `.env` и заполнить значения:
 
 ```bash
+cp .env.example .env
+
 BOT_TOKEN="<token>"
 ADMIN_IDS="123,456"
-POSTGRES_PASSWORD="ruins"
-# Можно указать внешний PostgreSQL
-# DATABASE_URL="postgresql://user:pass@host:5432/ruins"
+DATABASE_URL="postgresql://user:pass@host:5432/ruins"
+BOT_TEST_MODE="0"
 ```
 
 2) Собрать и запустить контейнер:
@@ -159,12 +160,12 @@ POSTGRES_PASSWORD="ruins"
 docker compose up -d --build
 ```
 
-3) Данные Postgres сохраняются в docker-томе `pgdata`.
+3) Бот подключается к внешнему PostgreSQL через `DATABASE_URL`.
 
 ## Миграция из SQLite (опционально)
 
 1) Остановить бота и сохранить текущий `ruins.db`.
-2) Запустить PostgreSQL и создать пустую базу `ruins` (docker-compose делает это автоматически).
+2) Создать пустую базу `ruins` в вашем PostgreSQL.
 3) Перенести данные утилитой pgloader (SQLite → PostgreSQL) или скриптом импорта.
 4) Проверить количество записей в `users`, `runs`, `user_stats`, `seasons` после миграции.
 
