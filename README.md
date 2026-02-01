@@ -115,7 +115,7 @@
 
 - Python 3.11+
 - aiogram 3.x
-- SQLite (aiosqlite)
+- PostgreSQL (asyncpg)
 
 ## Запуск
 
@@ -126,7 +126,13 @@
 export BOT_TOKEN="<token>"
 ```
 
-1) Установить зависимости и запустить:
+3) Указать подключение к PostgreSQL:
+
+```bash
+export DATABASE_URL="postgresql://ruins:ruins@localhost:5432/ruins"
+```
+
+4) Установить зависимости и запустить:
 
 ```bash
 python -m venv .venv
@@ -142,24 +148,27 @@ python -m bot.main
 ```bash
 BOT_TOKEN="<token>"
 ADMIN_IDS="123,456"
-RUINS_DB_PATH="/data/ruins.db"
+POSTGRES_PASSWORD="ruins"
+# Можно указать внешний PostgreSQL
+# DATABASE_URL="postgresql://user:pass@host:5432/ruins"
 ```
 
-1) Создать файл базы на хосте:
-
-```bash
-touch ruins.db
-```
-
-1) Собрать и запустить контейнер:
+2) Собрать и запустить контейнер:
 
 ```bash
 docker compose up -d --build
 ```
 
-1) База данных хранится на хосте в `./ruins.db` (можно указать любой путь и смонтировать его в `/data/ruins.db`).
+3) Данные Postgres сохраняются в docker-томе `pgdata`.
 
-## Структура данных (SQLite)
+## Миграция из SQLite (опционально)
+
+1) Остановить бота и сохранить текущий `ruins.db`.
+2) Запустить PostgreSQL и создать пустую базу `ruins` (docker-compose делает это автоматически).
+3) Перенести данные утилитой pgloader (SQLite → PostgreSQL) или скриптом импорта.
+4) Проверить количество записей в `users`, `runs`, `user_stats`, `seasons` после миграции.
+
+## Структура данных (PostgreSQL)
 
 - `users`: id, telegram_id, username, max_floor, xp, created_at
 - `runs`: id, user_id, started_at, ended_at, max_floor, is_active, state_json

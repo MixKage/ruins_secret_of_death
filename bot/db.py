@@ -1,22 +1,18 @@
 import asyncio
 import json
-import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
+import asyncpg
 
-_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "ruins.db"
-DB_PATH = Path(os.getenv("RUINS_DB_PATH", "")).expanduser() if os.getenv("RUINS_DB_PATH") else _DEFAULT_DB_PATH
-SQLITE_TIMEOUT = 5.0
-SQLITE_BUSY_TIMEOUT_MS = 5000
-SQLITE_WRITE_RETRIES = 3
-SQLITE_WRITE_RETRY_DELAY = 0.1
-WRITE_SQL_PREFIXES = ("insert", "update", "delete", "replace", "create", "drop", "alter")
-_WRITE_LOCK = asyncio.Lock()
+DB_DSN_ENV = ("DATABASE_URL", "POSTGRES_DSN", "POSTGRES_URL")
+PG_POOL_MIN = max(1, int(os.getenv("PG_POOL_MIN", "1")))
+PG_POOL_MAX = max(PG_POOL_MIN, int(os.getenv("PG_POOL_MAX", "10")))
+PG_COMMAND_TIMEOUT = float(os.getenv("PG_COMMAND_TIMEOUT", "30"))
+_POOL: asyncpg.Pool | None = None
+_POOL_LOCK = asyncio.Lock()
 PIONEER_BADGE_ID = "first_pioneer"
 PIONEER_BADGE_CUTOFF = "2026-01-01"
 SEASON0_KEY = "2025-12"
@@ -25,80 +21,167 @@ SEASON0_BACKFILL_SETTING = "season0_backfill_done"
 TREASURE_REWARD_XP = 5
 
 
+def _get_db_dsn() -> str:
+    for key in DB_DSN_ENV:
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    raise RuntimeError("DATABASE_URL is not set")
+
+
+async def _get_pool() -> asyncpg.Pool:
+    global _POOL
+    if _POOL:
+        return _POOL
+    async with _POOL_LOCK:
+        if _POOL:
+            return _POOL
+        _POOL = await asyncpg.create_pool(
+            dsn=_get_db_dsn(),
+            min_size=PG_POOL_MIN,
+            max_size=PG_POOL_MAX,
+            command_timeout=PG_COMMAND_TIMEOUT,
+            server_settings={"timezone": "UTC"},
+        )
+        return _POOL
+
+
+class _PgConn:
+    def __init__(self, conn: asyncpg.Connection) -> None:
+        self._conn = conn
+
+    async def execute(self, sql: str, *params):
+        return await self._conn.execute(sql, *params)
+
+    async def fetch(self, sql: str, *params):
+        return await self._conn.fetch(sql, *params)
+
+    async def fetchrow(self, sql: str, *params):
+        return await self._conn.fetchrow(sql, *params)
+
+    async def fetchval(self, sql: str, *params):
+        return await self._conn.fetchval(sql, *params)
+
+    async def executemany(self, sql: str, seq_of_params):
+        return await self._conn.executemany(sql, seq_of_params)
+
+    async def commit(self) -> None:
+        return None
+
+
 @asynccontextmanager
-async def _connect() -> aiosqlite.Connection:
-    db = await aiosqlite.connect(DB_PATH, timeout=SQLITE_TIMEOUT)
-    await _execute(db, "PRAGMA journal_mode=WAL")
-    await _execute(db, f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
-    try:
-        yield db
-    finally:
-        await db.close()
+async def _connect() -> _PgConn:
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            yield _PgConn(conn)
 
 
-def _is_write(sql: str) -> bool:
-    return sql.lstrip().lower().startswith(WRITE_SQL_PREFIXES)
+def _translate_sql(sql: str) -> str:
+    index = 0
+    out = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'" and not in_double:
+            out.append(ch)
+            if in_single:
+                if i + 1 < len(sql) and sql[i + 1] == "'":
+                    out.append("'")
+                    i += 1
+                else:
+                    in_single = False
+            else:
+                in_single = True
+        elif ch == '"' and not in_single:
+            out.append(ch)
+            in_double = not in_double
+        elif ch == "?" and not in_single and not in_double:
+            index += 1
+            out.append(f"${index}")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
-async def _execute(db: aiosqlite.Connection, sql: str, params: tuple = ()):
-    if not _is_write(sql):
-        return await db.execute(sql, params)
-    async with _WRITE_LOCK:
-        return await _execute_with_retry(db, sql, params)
+def _returns_rows(sql: str) -> bool:
+    cleaned = sql.lstrip().lower()
+    if cleaned.startswith("select") or cleaned.startswith("with"):
+        return True
+    return " returning " in cleaned
 
 
-async def _executemany(db: aiosqlite.Connection, sql: str, seq_of_params):
-    if not _is_write(sql):
-        return await db.executemany(sql, seq_of_params)
-    async with _WRITE_LOCK:
-        return await _execute_with_retry(db, sql, seq_of_params, many=True)
+class _Cursor:
+    def __init__(self, rows=None, status: str | None = None, lastrowid: int | None = None):
+        self._rows = rows or []
+        self._index = 0
+        self.status = status
+        self.lastrowid = lastrowid
+
+    async def fetchone(self):
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    async def fetchall(self):
+        if self._index == 0:
+            return list(self._rows)
+        remaining = self._rows[self._index :]
+        self._index = len(self._rows)
+        return remaining
 
 
-async def _executescript(db: aiosqlite.Connection, script: str):
-    async with _WRITE_LOCK:
-        return await _execute_with_retry(db, script, (), script=True)
+async def _execute(db: _PgConn, sql: str, params: tuple = ()):
+    translated = _translate_sql(sql)
+    params = params or ()
+    if not isinstance(params, (tuple, list)):
+        params = (params,)
+    if _returns_rows(translated):
+        rows = await db.fetch(translated, *params)
+        lastrowid = None
+        if rows and "returning" in translated.lower():
+            try:
+                lastrowid = int(rows[0][0])
+            except (TypeError, ValueError, IndexError):
+                lastrowid = None
+        return _Cursor(rows, lastrowid=lastrowid)
+    status = await db.execute(translated, *params)
+    return _Cursor([], status=status)
 
 
-async def _execute_with_retry(
-    db: aiosqlite.Connection,
-    sql: str,
-    params,
-    many: bool = False,
-    script: bool = False,
-):
-    for attempt in range(SQLITE_WRITE_RETRIES):
-        try:
-            if script:
-                return await db.executescript(sql)
-            if many:
-                return await db.executemany(sql, params)
-            return await db.execute(sql, params)
-        except sqlite3.OperationalError as exc:
-            if "database is locked" not in str(exc).lower():
-                raise
-            if attempt >= SQLITE_WRITE_RETRIES - 1:
-                raise
-            await asyncio.sleep(SQLITE_WRITE_RETRY_DELAY * (2**attempt))
+async def _executemany(db: _PgConn, sql: str, seq_of_params):
+    translated = _translate_sql(sql)
+    return await db.executemany(translated, seq_of_params)
 
 
 async def init_db() -> None:
     async with _connect() as db:
-        await _executescript(db, 
+        await _execute(
+            db,
             """
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE NOT NULL,
+                id BIGSERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
                 username TEXT,
                 max_floor INTEGER DEFAULT 0,
                 xp INTEGER DEFAULT 0,
                 tutorial_done INTEGER DEFAULT 0,
                 unlocked_heroes_json TEXT DEFAULT '["wanderer"]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ended_at TIMESTAMP,
                 max_floor INTEGER DEFAULT 0,
@@ -106,10 +189,14 @@ async def init_db() -> None:
                 is_tutorial INTEGER DEFAULT 0,
                 state_json TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS user_stats (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 total_runs INTEGER DEFAULT 0,
                 deaths INTEGER DEFAULT 0,
                 deaths_by_floor TEXT DEFAULT '{}',
@@ -119,31 +206,47 @@ async def init_db() -> None:
                 chests_opened INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS user_broadcasts (
-                user_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
                 broadcast_key TEXT NOT NULL,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, broadcast_key),
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS seasons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 season_key TEXT UNIQUE NOT NULL,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ended_at TIMESTAMP
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS user_season_stats (
-                user_id INTEGER NOT NULL,
-                season_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                season_id BIGINT NOT NULL,
                 max_floor INTEGER DEFAULT 0,
                 max_floor_character TEXT DEFAULT 'wanderer',
                 total_runs INTEGER DEFAULT 0,
@@ -156,21 +259,29 @@ async def init_db() -> None:
                 PRIMARY KEY (user_id, season_id),
                 FOREIGN KEY(user_id) REFERENCES users(id),
                 FOREIGN KEY(season_id) REFERENCES seasons(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS user_badges (
-                user_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
                 badge_id TEXT NOT NULL,
                 count INTEGER DEFAULT 1,
                 last_awarded_season TEXT,
                 last_awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, badge_id),
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS star_purchases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 telegram_payment_charge_id TEXT UNIQUE NOT NULL,
                 provider_payment_charge_id TEXT,
                 levels INTEGER NOT NULL,
@@ -178,29 +289,37 @@ async def init_db() -> None:
                 xp_added INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS star_actions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 telegram_payment_charge_id TEXT UNIQUE NOT NULL,
                 provider_payment_charge_id TEXT,
                 action TEXT NOT NULL,
                 stars INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+            )
+            """,
+        )
+        await _execute(
+            db,
+            """
             CREATE TABLE IF NOT EXISTS season_history (
-                season_id INTEGER PRIMARY KEY,
+                season_id BIGINT PRIMARY KEY,
                 season_number INTEGER NOT NULL,
                 season_key TEXT NOT NULL,
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 winners_json TEXT DEFAULT '{}',
                 summary_json TEXT DEFAULT '{}',
                 FOREIGN KEY(season_id) REFERENCES seasons(id)
-            );
-            """
+            )
+            """,
         )
         await _ensure_user_columns(db)
         await _ensure_run_columns(db)
@@ -208,53 +327,36 @@ async def init_db() -> None:
         await _ensure_user_season_columns(db)
         await _backfill_season0_stats(db)
         await _execute(db, 
-            "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
-            "SELECT id, ?, 1, NULL FROM users WHERE DATE(created_at) < DATE(?)",
+            "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
+            "SELECT id, ?, 1, NULL FROM users WHERE created_at::date < ?::date "
+            "ON CONFLICT DO NOTHING",
             (PIONEER_BADGE_ID, PIONEER_BADGE_CUTOFF),
         )
-        await db.commit()
 
 
-async def _ensure_user_columns(db: aiosqlite.Connection) -> None:
-    cursor = await _execute(db, "PRAGMA table_info(users)")
-    columns = {row[1] for row in await cursor.fetchall()}
-    if "xp" not in columns:
-        await _execute(db, "ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0")
-        await db.commit()
-    if "tutorial_done" not in columns:
-        await _execute(db, "ALTER TABLE users ADD COLUMN tutorial_done INTEGER DEFAULT 0")
-        await db.commit()
-    if "unlocked_heroes_json" not in columns:
-        await _execute(
-            db,
-            "ALTER TABLE users ADD COLUMN unlocked_heroes_json TEXT DEFAULT '[\"wanderer\"]'",
-        )
-        await db.commit()
+async def _ensure_user_columns(db: _PgConn) -> None:
+    await _execute(db, "ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0")
+    await _execute(db, "ALTER TABLE users ADD COLUMN IF NOT EXISTS tutorial_done INTEGER DEFAULT 0")
+    await _execute(
+        db,
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS unlocked_heroes_json TEXT DEFAULT '[\"wanderer\"]'",
+    )
     await _execute(
         db,
         "UPDATE users SET unlocked_heroes_json = '[\"wanderer\"]' "
         "WHERE unlocked_heroes_json IS NULL OR unlocked_heroes_json = '' OR unlocked_heroes_json = '[]'",
     )
-    await db.commit()
 
 
-async def _ensure_run_columns(db: aiosqlite.Connection) -> None:
-    cursor = await _execute(db, "PRAGMA table_info(runs)")
-    columns = {row[1] for row in await cursor.fetchall()}
-    if "is_tutorial" not in columns:
-        await _execute(db, "ALTER TABLE runs ADD COLUMN is_tutorial INTEGER DEFAULT 0")
-        await db.commit()
+async def _ensure_run_columns(db: _PgConn) -> None:
+    await _execute(db, "ALTER TABLE runs ADD COLUMN IF NOT EXISTS is_tutorial INTEGER DEFAULT 0")
 
 
-async def _ensure_user_stats_columns(db: aiosqlite.Connection) -> None:
-    cursor = await _execute(db, "PRAGMA table_info(user_stats)")
-    columns = {row[1] for row in await cursor.fetchall()}
-    if "hero_runs_json" not in columns:
-        await _execute(
-            db,
-            "ALTER TABLE user_stats ADD COLUMN hero_runs_json TEXT DEFAULT '{}'",
-        )
-        await db.commit()
+async def _ensure_user_stats_columns(db: _PgConn) -> None:
+    await _execute(
+        db,
+        "ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS hero_runs_json TEXT DEFAULT '{}'",
+    )
     cursor = await _execute(
         db,
         "SELECT user_id, total_runs, hero_runs_json FROM user_stats",
@@ -269,39 +371,33 @@ async def _ensure_user_stats_columns(db: aiosqlite.Connection) -> None:
             "UPDATE user_stats SET hero_runs_json = ? WHERE user_id = ?",
             (json.dumps(hero_runs), user_id),
         )
-    await db.commit()
 
 
-async def _ensure_user_season_columns(db: aiosqlite.Connection) -> None:
-    cursor = await _execute(db, "PRAGMA table_info(user_season_stats)")
-    columns = {row[1] for row in await cursor.fetchall()}
-    if "xp_gained" not in columns:
-        await _execute(db, "ALTER TABLE user_season_stats ADD COLUMN xp_gained INTEGER DEFAULT 0")
-        await db.commit()
-    if "deaths" not in columns:
-        await _execute(db, "ALTER TABLE user_season_stats ADD COLUMN deaths INTEGER DEFAULT 0")
-        await db.commit()
-    if "deaths_by_floor" not in columns:
-        await _execute(
-            db,
-            "ALTER TABLE user_season_stats ADD COLUMN deaths_by_floor TEXT DEFAULT '{}'",
-        )
-        await db.commit()
-    if "max_floor_character" not in columns:
-        await _execute(
-            db,
-            "ALTER TABLE user_season_stats ADD COLUMN max_floor_character TEXT DEFAULT 'wanderer'",
-        )
-        await db.commit()
+async def _ensure_user_season_columns(db: _PgConn) -> None:
     await _execute(
         db,
-        "UPDATE user_season_stats SET max_floor_character = \"wanderer\" "
-        "WHERE max_floor_character IS NULL OR max_floor_character = \"\"",
+        "ALTER TABLE user_season_stats ADD COLUMN IF NOT EXISTS xp_gained INTEGER DEFAULT 0",
     )
-    await db.commit()
+    await _execute(
+        db,
+        "ALTER TABLE user_season_stats ADD COLUMN IF NOT EXISTS deaths INTEGER DEFAULT 0",
+    )
+    await _execute(
+        db,
+        "ALTER TABLE user_season_stats ADD COLUMN IF NOT EXISTS deaths_by_floor TEXT DEFAULT '{}'",
+    )
+    await _execute(
+        db,
+        "ALTER TABLE user_season_stats ADD COLUMN IF NOT EXISTS max_floor_character TEXT DEFAULT 'wanderer'",
+    )
+    await _execute(
+        db,
+        "UPDATE user_season_stats SET max_floor_character = 'wanderer' "
+        "WHERE max_floor_character IS NULL OR max_floor_character = ''",
+    )
 
 
-async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
+async def _backfill_season0_stats(db: _PgConn) -> None:
     cursor = await _execute(db, "SELECT value FROM settings WHERE key = ?", (SEASON0_BACKFILL_SETTING,))
     row = await cursor.fetchone()
     if row and row[0] == "1":
@@ -312,11 +408,13 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
     if row:
         season_id = int(row[0])
     else:
-        cursor = await _execute(db, 
-            "INSERT INTO seasons (season_key, started_at) VALUES (?, ?)",
+        cursor = await _execute(
+            db,
+            "INSERT INTO seasons (season_key, started_at) VALUES (?, ?) RETURNING id",
             (SEASON0_KEY, SEASON0_START),
         )
-        season_id = int(cursor.lastrowid)
+        row = await cursor.fetchone()
+        season_id = int(row[0]) if row else 0
 
     cursor = await _execute(db, 
         "SELECT user_id, state_json, max_floor FROM runs "
@@ -325,11 +423,12 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
     )
     rows = await cursor.fetchall()
     if not rows:
-        await _execute(db, 
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        await _execute(
+            db,
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             (SEASON0_BACKFILL_SETTING, "1"),
         )
-        await db.commit()
         return
 
     aggregates: Dict[int, Dict[str, Any]] = {}
@@ -367,11 +466,13 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             agg["kills"][enemy_id] = agg["kills"].get(enemy_id, 0) + int(count)
 
     for user_id, data in aggregates.items():
-        await _execute(db, 
-            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+        await _execute(
+            db,
+            "INSERT INTO user_season_stats (user_id, season_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
             (user_id, season_id),
         )
-        await _execute(db, 
+        await _execute(
+            db,
             "UPDATE user_season_stats SET max_floor = ?, max_floor_character = ?, total_runs = ?, kills_json = ?, "
             "treasures_found = ?, chests_opened = ?, xp_gained = ?, updated_at = CURRENT_TIMESTAMP "
             "WHERE user_id = ? AND season_id = ?",
@@ -388,11 +489,12 @@ async def _backfill_season0_stats(db: aiosqlite.Connection) -> None:
             ),
         )
 
-    await _execute(db, 
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+    await _execute(
+        db,
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (SEASON0_BACKFILL_SETTING, "1"),
     )
-    await db.commit()
 
 
 def _current_season_key() -> str:
@@ -408,9 +510,14 @@ async def get_or_create_current_season() -> Tuple[int, str, Optional[Tuple[int, 
         active = await cursor.fetchone()
         if active:
             return active[0], active[1], None
-        cursor = await _execute(db, "INSERT INTO seasons (season_key) VALUES (?)", (season_key,))
-        await db.commit()
-        return cursor.lastrowid, season_key, None
+        cursor = await _execute(
+            db,
+            "INSERT INTO seasons (season_key) VALUES (?) RETURNING id",
+            (season_key,),
+        )
+        row = await cursor.fetchone()
+        season_id = int(row[0]) if row else 0
+        return season_id, season_key, None
 
 
 async def get_active_season() -> Optional[Tuple[int, str]]:
@@ -456,13 +563,15 @@ async def reopen_season(season_id: int) -> None:
 
 async def create_season(season_key: str) -> int:
     async with _connect() as db:
-        cursor = await _execute(db, 
-            "INSERT OR IGNORE INTO seasons (season_key) VALUES (?)",
+        cursor = await _execute(
+            db,
+            "INSERT INTO seasons (season_key) VALUES (?) "
+            "ON CONFLICT (season_key) DO NOTHING RETURNING id",
             (season_key,),
         )
-        await db.commit()
-        if cursor.lastrowid:
-            return int(cursor.lastrowid)
+        row = await cursor.fetchone()
+        if row:
+            return int(row[0])
         cursor = await _execute(db, 
             "SELECT id FROM seasons WHERE season_key = ?",
             (season_key,),
@@ -496,13 +605,19 @@ async def save_season_history(
     summary_json: str,
 ) -> None:
     async with _connect() as db:
-        await _execute(db, 
-            "INSERT OR REPLACE INTO season_history "
+        await _execute(
+            db,
+            "INSERT INTO season_history "
             "(season_id, season_number, season_key, processed_at, winners_json, summary_json) "
-            "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?)",
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?) "
+            "ON CONFLICT (season_id) DO UPDATE SET "
+            "season_number = EXCLUDED.season_number, "
+            "season_key = EXCLUDED.season_key, "
+            "processed_at = CURRENT_TIMESTAMP, "
+            "winners_json = EXCLUDED.winners_json, "
+            "summary_json = EXCLUDED.summary_json",
             (season_id, season_number, season_key, winners_json, summary_json),
         )
-        await db.commit()
 
 
 async def get_season_history(season_number: int) -> Optional[Tuple[int, str, str, str]]:
@@ -602,7 +717,7 @@ async def add_season_xp(user_id: int, season_id: int, amount: int) -> None:
     async with _connect() as db:
         await _execute(
             db,
-            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+            "INSERT INTO user_season_stats (user_id, season_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
             (user_id, season_id),
         )
         await _execute(
@@ -653,9 +768,9 @@ async def record_star_purchase(
     async with _connect() as db:
         await _execute(
             db,
-            "INSERT OR IGNORE INTO star_purchases "
+            "INSERT INTO star_purchases "
             "(user_id, telegram_payment_charge_id, provider_payment_charge_id, levels, stars, xp_added) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             (
                 user_id,
                 telegram_payment_charge_id,
@@ -679,9 +794,9 @@ async def record_star_action(
     async with _connect() as db:
         await _execute(
             db,
-            "INSERT OR IGNORE INTO star_actions "
+            "INSERT INTO star_actions "
             "(user_id, telegram_payment_charge_id, provider_payment_charge_id, action, stars) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             (
                 user_id,
                 telegram_payment_charge_id,
@@ -765,7 +880,7 @@ async def record_season_stats(
 ) -> None:
     async with _connect() as db:
         await _execute(db, 
-            "INSERT OR IGNORE INTO user_season_stats (user_id, season_id) VALUES (?, ?)",
+            "INSERT INTO user_season_stats (user_id, season_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
             (user_id, season_id),
         )
         cursor = await _execute(db, 
@@ -1039,7 +1154,7 @@ async def award_badge(
 async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
     async with _connect() as db:
         await _execute(db, 
-            "INSERT OR IGNORE INTO users (telegram_id, username) VALUES (?, ?)",
+            "INSERT INTO users (telegram_id, username) VALUES (?, ?) ON CONFLICT (telegram_id) DO NOTHING",
             (telegram_id, username),
         )
         await _execute(db, 
@@ -1061,8 +1176,9 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> int:
         created_at = created_row[0] if created_row else None
         if created_at:
             await _execute(db, 
-                "INSERT OR IGNORE INTO user_badges (user_id, badge_id, count, last_awarded_season) "
-                "SELECT ?, ?, 1, NULL WHERE DATE(?) < DATE(?)",
+                "INSERT INTO user_badges (user_id, badge_id, count, last_awarded_season) "
+                "SELECT ?, ?, 1, NULL WHERE ?::date < ?::date "
+                "ON CONFLICT DO NOTHING",
                 (user_id, PIONEER_BADGE_ID, created_at, PIONEER_BADGE_CUTOFF),
             )
         await db.commit()
@@ -1156,21 +1272,21 @@ async def create_run(user_id: int, state: Dict[str, Any]) -> int:
     async with _connect() as db:
         cursor = await _execute(db, 
             "INSERT INTO runs (user_id, state_json, max_floor, is_active, is_tutorial) "
-            "VALUES (?, ?, ?, 1, 0)",
+            "VALUES (?, ?, ?, 1, 0) RETURNING id",
             (user_id, json.dumps(state), state.get("floor", 0)),
         )
-        await db.commit()
-        return cursor.lastrowid
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
 async def create_tutorial_run(user_id: int, state: Dict[str, Any]) -> int:
     async with _connect() as db:
         cursor = await _execute(db, 
             "INSERT INTO runs (user_id, state_json, max_floor, is_active, is_tutorial) "
-            "VALUES (?, ?, ?, 1, 1)",
+            "VALUES (?, ?, ?, 1, 1) RETURNING id",
             (user_id, json.dumps(state), state.get("floor", 0)),
         )
-        await db.commit()
-        return cursor.lastrowid
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
 
 async def update_run(run_id: int, state: Dict[str, Any]) -> None:
@@ -1202,7 +1318,7 @@ async def finish_tutorial_run(run_id: int) -> None:
 async def update_user_max_floor(user_id: int, floor: int) -> None:
     async with _connect() as db:
         await _execute(db, 
-            "UPDATE users SET max_floor = MAX(max_floor, ?) WHERE id = ?",
+            "UPDATE users SET max_floor = GREATEST(max_floor, ?) WHERE id = ?",
             (floor, user_id),
         )
         await db.commit()
@@ -1299,7 +1415,7 @@ async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
 async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> None:
     async with _connect() as db:
         await _execute(db, 
-            "INSERT OR IGNORE INTO user_stats (user_id) VALUES (?)",
+            "INSERT INTO user_stats (user_id) VALUES (?) ON CONFLICT DO NOTHING",
             (user_id,),
         )
         cursor = await _execute(db, 
@@ -1381,7 +1497,7 @@ async def set_setting(key: str, value: str) -> None:
     async with _connect() as db:
         await _execute(db, 
             "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
             (key, value),
         )
         await db.commit()
@@ -1390,7 +1506,7 @@ async def set_setting(key: str, value: str) -> None:
 async def mark_broadcast_sent(user_id: int, broadcast_key: str) -> None:
     async with _connect() as db:
         await _execute(db, 
-            "INSERT OR IGNORE INTO user_broadcasts (user_id, broadcast_key) VALUES (?, ?)",
+            "INSERT INTO user_broadcasts (user_id, broadcast_key) VALUES (?, ?) ON CONFLICT DO NOTHING",
             (user_id, broadcast_key),
         )
         await db.commit()
@@ -1425,7 +1541,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
 
         cursor = await _execute(db, 
             "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM runs "
-            "WHERE started_at >= datetime('now', '-1 day') AND is_tutorial = 0"
+            "WHERE started_at >= (CURRENT_TIMESTAMP - INTERVAL '1 day') AND is_tutorial = 0"
         )
         row = await cursor.fetchone()
         runs_24h = int(row[0]) if row else 0

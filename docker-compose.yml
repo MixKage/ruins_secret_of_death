@@ -1,12 +1,25 @@
 version: "3.9"
 
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ruins
+      POSTGRES_USER: ruins
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ruins}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   ruins-bot:
     build: .
     restart: unless-stopped
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_IDS: ${ADMIN_IDS}
-      RUINS_DB_PATH: /data/ruins.db
-    volumes:
-      - ./ruins.db:/data/ruins.db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://ruins:${POSTGRES_PASSWORD:-ruins}@db:5432/ruins}
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
