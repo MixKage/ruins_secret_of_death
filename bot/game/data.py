@@ -4,30 +4,34 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
 
-def _load_json(filename: str):
+def _load_json(filename: str, default):
     path = DATA_DIR / filename
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return default
+    return payload if isinstance(payload, type(default)) else default
 
 
 def load_weapons():
-    return _load_json("weapons.json")
+    return _load_json("weapons.json", [])
 
 
 def load_enemies():
-    return _load_json("enemies.json")
+    return _load_json("enemies.json", [])
 
 
 def load_upgrades():
-    return _load_json("upgrades.json")
+    return _load_json("upgrades.json", [])
 
 
 def load_treasures():
-    return _load_json("chest_loot.json")
+    return _load_json("chest_loot.json", [])
 
 
 def load_scrolls():
-    return _load_json("scrolls.json")
+    return _load_json("scrolls.json", [])
 
 
 WEAPONS = load_weapons()

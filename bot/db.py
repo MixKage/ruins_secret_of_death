@@ -186,6 +186,38 @@ class _Cursor:
         return remaining
 
 
+def _json_dict(value: Any) -> Dict[str, Any]:
+    parsed = value
+    for _ in range(3):
+        if isinstance(parsed, str):
+            raw = parsed.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+            continue
+        break
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: Any) -> List[Any]:
+    parsed = value
+    for _ in range(3):
+        if isinstance(parsed, str):
+            raw = parsed.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+            continue
+        break
+    return parsed if isinstance(parsed, list) else []
+
+
 async def _execute(db: _PgConn, sql: str, params: tuple = ()):
     translated = _translate_sql(sql)
     params = params or ()
@@ -496,12 +528,7 @@ async def _backfill_season0_stats(db: _PgConn) -> None:
             },
         )
         agg["total_runs"] += 1
-        state = {}
-        if state_json:
-            try:
-                state = json.loads(state_json)
-            except json.JSONDecodeError:
-                state = {}
+        state = _json_dict(state_json)
         floor_value = int(state.get("floor", 0) or max_floor or 0)
         if floor_value > agg["max_floor"]:
             agg["max_floor"] = floor_value
@@ -711,12 +738,7 @@ async def get_unlocked_heroes(user_id: int) -> List[str]:
         if not row:
             return ["wanderer"]
         raw = row[0] or ""
-        try:
-            heroes = json.loads(raw) if raw else []
-        except json.JSONDecodeError:
-            heroes = []
-        if not isinstance(heroes, list):
-            heroes = []
+        heroes = _json_list(raw)
         if "wanderer" not in heroes:
             heroes.append("wanderer")
         return heroes
@@ -914,8 +936,8 @@ async def get_user_season_stats(user_id: int, season_id: int) -> Dict[str, Any]:
             "max_floor": max_floor or 0,
             "total_runs": total_runs or 0,
             "deaths": deaths or 0,
-            "deaths_by_floor": json.loads(deaths_by_floor or "{}"),
-            "kills": json.loads(kills_json or "{}"),
+            "deaths_by_floor": _json_dict(deaths_by_floor),
+            "kills": _json_dict(kills_json),
             "treasures_found": treasures_found or 0,
             "chests_opened": chests_opened or 0,
             "xp_gained": xp_gained or 0,
@@ -970,8 +992,8 @@ async def record_season_stats(
             max_floor_character = state.get("character_id") or "wanderer"
         total_runs = (total_runs or 0) + 1
         deaths = deaths or 0
-        deaths_by_floor = json.loads(deaths_by_floor or "{}")
-        kills = json.loads(kills_json or "{}")
+        deaths_by_floor = _json_dict(deaths_by_floor)
+        kills = _json_dict(kills_json)
         treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
         chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
         xp_bonus = int(state.get("xp_bonus", 0))
@@ -1026,7 +1048,7 @@ async def get_season_death_stats(season_id: int) -> tuple[int, float]:
         weighted_sum = 0
         death_total = 0
         for (deaths_by_floor,) in rows:
-            data = json.loads(deaths_by_floor or "{}")
+            data = _json_dict(deaths_by_floor)
             for floor_str, count in data.items():
                 try:
                     floor = int(floor_str)
@@ -1092,7 +1114,7 @@ async def get_season_stats_rows(season_id: int) -> List[Dict[str, Any]]:
                     "user_id": user_id,
                     "max_floor": max_floor or 0,
                     "total_runs": total_runs or 0,
-                    "kills": json.loads(kills_json or "{}"),
+                    "kills": _json_dict(kills_json),
                     "treasures_found": treasures_found or 0,
                     "chests_opened": chests_opened or 0,
                     "xp_gained": xp_gained or 0,
@@ -1134,7 +1156,7 @@ async def get_season_player_rows(season_id: int) -> List[Dict[str, Any]]:
                     "username": username,
                     "max_floor": max_floor or 0,
                     "total_runs": total_runs or 0,
-                    "kills": json.loads(kills_json or "{}"),
+                    "kills": _json_dict(kills_json),
                     "treasures_found": treasures_found or 0,
                     "chests_opened": chests_opened or 0,
                     "xp_gained": xp_gained or 0,
@@ -1287,7 +1309,7 @@ async def get_active_run(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
         if not row:
             return None
         run_id, state_json = row
-        return run_id, json.loads(state_json)
+        return run_id, _json_dict(state_json)
 
 async def get_active_tutorial(user_id: int) -> Optional[Tuple[int, Dict[str, Any]]]:
     async with _connect() as db:
@@ -1301,7 +1323,7 @@ async def get_active_tutorial(user_id: int) -> Optional[Tuple[int, Dict[str, Any
         if not row:
             return None
         run_id, state_json = row
-        return run_id, json.loads(state_json)
+        return run_id, _json_dict(state_json)
 
 async def get_run_by_id(run_id: int) -> Optional[Tuple[int, bool, Dict[str, Any]]]:
     async with _connect() as db:
@@ -1314,7 +1336,7 @@ async def get_run_by_id(run_id: int) -> Optional[Tuple[int, bool, Dict[str, Any]
         if not row:
             return None
         user_id, is_active, state_json = row
-        state = json.loads(state_json) if state_json else {}
+        state = _json_dict(state_json)
         return int(user_id), bool(is_active), state
 
 
@@ -1412,7 +1434,7 @@ async def get_last_run(user_id: int) -> Optional[Tuple[int, int, Dict[str, Any]]
         if not row:
             return None
         run_id, max_floor, state_json = row
-        state = json.loads(state_json) if state_json else {}
+        state = _json_dict(state_json)
         return run_id, max_floor, state
 
 
@@ -1454,9 +1476,9 @@ async def get_user_stats(user_id: int) -> Optional[Dict[str, Any]]:
         return {
             "total_runs": total_runs or 0,
             "deaths": deaths or 0,
-            "deaths_by_floor": json.loads(deaths_by_floor or "{}"),
-            "kills": json.loads(kills_json or "{}"),
-            "hero_runs": json.loads(hero_runs_json or "{}"),
+            "deaths_by_floor": _json_dict(deaths_by_floor),
+            "kills": _json_dict(kills_json),
+            "hero_runs": _json_dict(hero_runs_json),
             "treasures_found": treasures_found or 0,
             "chests_opened": chests_opened or 0,
         }
@@ -1486,9 +1508,9 @@ async def record_run_stats(user_id: int, state: Dict[str, Any], died: bool) -> N
 
         total_runs = (total_runs or 0) + 1
         deaths = deaths or 0
-        deaths_by_floor = json.loads(deaths_by_floor or "{}")
-        kills = json.loads(kills_json or "{}")
-        hero_runs = json.loads(hero_runs_json or "{}")
+        deaths_by_floor = _json_dict(deaths_by_floor)
+        kills = _json_dict(kills_json)
+        hero_runs = _json_dict(hero_runs_json)
         treasures_found = (treasures_found or 0) + int(state.get("treasures_found", 0))
         chests_opened = (chests_opened or 0) + int(state.get("chests_opened", 0))
         hero_id = state.get("character_id") or "wanderer"
@@ -1602,7 +1624,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         weighted_sum = 0
         death_total = 0
         for (deaths_by_floor,) in rows:
-            data = json.loads(deaths_by_floor or "{}")
+            data = _json_dict(deaths_by_floor)
             for floor_str, count in data.items():
                 try:
                     floor = int(floor_str)
@@ -1618,7 +1640,7 @@ async def get_admin_stats(broadcast_key: Optional[str] = None) -> Dict[str, obje
         kill_totals = []
         user_ids = []
         for user_id, kills_json in rows:
-            kills = json.loads(kills_json or "{}")
+            kills = _json_dict(kills_json)
             total_kills = sum(int(value) for value in kills.values())
             if total_kills > 0:
                 kill_totals.append((user_id, total_kills))

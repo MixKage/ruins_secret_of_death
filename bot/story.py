@@ -21,6 +21,20 @@ ROMAN_NUMERALS = {
     10: "X",
 }
 
+
+def _safe_json_dict(value):
+    parsed = value
+    for _ in range(2):
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except json.JSONDecodeError:
+                return {}
+            continue
+        break
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _load_chapters() -> Dict[int, Dict[str, str]]:
     if not STORY_DATA_PATH.exists():
         return {}
@@ -28,10 +42,12 @@ def _load_chapters() -> Dict[int, Dict[str, str]]:
         payload = json.loads(STORY_DATA_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    payload = _safe_json_dict(payload)
     source = payload.get("chapters") if isinstance(payload, dict) else None
     if source is None:
         source = payload
-    if not isinstance(source, dict):
+    source = _safe_json_dict(source)
+    if not source:
         return {}
     chapters: Dict[int, Dict[str, str]] = {}
     for key, value in source.items():
