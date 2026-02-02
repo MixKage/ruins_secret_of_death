@@ -53,7 +53,7 @@ jobs:
       run: |
         sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_HOST }} << 'EOF'
         set -e  # Выход при ошибке
-        cd /ruins_secret_of_death
+        cd ./ruins_secret_of_death
         git pull origin dev
         docker compose build
         docker compose up -d
