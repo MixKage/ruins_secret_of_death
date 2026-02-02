@@ -3,7 +3,7 @@ name: Build, Test, and Deploy
 on:
   push:
     branches:
-      - dev
+      - main
   workflow_dispatch:  # Ручной запуск workflow
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
       env:
         SSH_PASSWORD: ${{ secrets.SSH_PRIVATE_KEY }}
       run: |
-        sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_ADDRESS }} << 'EOF'
+        sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_HOST }} << 'EOF'
         set -e  # Выход при ошибке
         cd /ruins_secret_of_death
         git pull origin dev
