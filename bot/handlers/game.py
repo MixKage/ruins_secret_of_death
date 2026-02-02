@@ -895,20 +895,20 @@ async def inventory_action(callback: CallbackQuery) -> None:
         state["phase"] = "tutorial" if state.get("tutorial") else "battle"
         if state.get("tutorial"):
             result = tutorial_use_scroll(state, scroll_id)
-        if state.get("tutorial_failed") or result == "fail":
+            if state.get("tutorial_failed") or result == "fail":
+                alert = _pop_tutorial_alert(state)
+                await db.update_run(run_id, state)
+                await _answer_tutorial_alert(callback, alert)
+                await _show_tutorial_failed(callback, state)
+                return
+            if state.get("tutorial_completed") or result == "complete":
+                await _complete_tutorial(callback, user_row[0], run_id, state)
+                return
             alert = _pop_tutorial_alert(state)
             await db.update_run(run_id, state)
             await _answer_tutorial_alert(callback, alert)
-            await _show_tutorial_failed(callback, state)
+            await _send_state(callback, state, run_id)
             return
-        if state.get("tutorial_completed") or result == "complete":
-            await _complete_tutorial(callback, user_row[0], run_id, state)
-            return
-        alert = _pop_tutorial_alert(state)
-        await db.update_run(run_id, state)
-        await _answer_tutorial_alert(callback, alert)
-        await _send_state(callback, state, run_id)
-        return
         scrolls = state.get("player", {}).get("scrolls", [])
         index = None
         for idx, scroll in enumerate(scrolls):
