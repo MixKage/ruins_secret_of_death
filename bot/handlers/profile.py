@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 
 from aiogram import Router, F
@@ -50,6 +51,25 @@ def _format_badges(badges, season_key: str) -> tuple[list[str], list[str], list[
     return seasonal_current, seasonal_history, permanent
 
 
+def _as_dict(value) -> dict:
+    parsed = value
+    for _ in range(10):
+        if isinstance(parsed, (bytes, bytearray, memoryview)):
+            parsed = bytes(parsed).decode("utf-8", errors="ignore")
+            continue
+        if isinstance(parsed, str):
+            raw = parsed.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+            continue
+        break
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _potential_season_awards(
     user_id: int,
     rank: int | None,
@@ -77,7 +97,7 @@ def _potential_season_awards(
         if rank <= 10:
             add_award(BADGES["season_top10"].name, f"место #{rank}")
 
-    user_kills = sum((season_stats.get("kills") or {}).values())
+    user_kills = sum(_as_dict(season_stats.get("kills")).values())
     user_chests = int(season_stats.get("chests_opened", 0))
     user_treasures = int(season_stats.get("treasures_found", 0))
     user_runs = int(season_stats.get("total_runs", 0))
@@ -87,7 +107,7 @@ def _potential_season_awards(
     max_runs = max((int(row.get("total_runs", 0)) for row in rows), default=0)
     max_chests = max((int(row.get("chests_opened", 0)) for row in rows), default=0)
     max_treasures = max((int(row.get("treasures_found", 0)) for row in rows), default=0)
-    max_kills = max((sum((row.get("kills") or {}).values()) for row in rows), default=0)
+    max_kills = max((sum(_as_dict(row.get("kills")).values()) for row in rows), default=0)
 
     if user_max_floor > 0 and user_max_floor == max_floor:
         add_award(BADGES["season_highest_floor"].name, f"этаж {user_max_floor}")
@@ -119,9 +139,9 @@ async def build_profile_text(user_id: int, is_admin: bool) -> tuple[str, bool]:
     last_closed = await db.get_last_season(ended_only=True)
     last_closed_key = last_closed[1] if last_closed else None
 
-    total_kills = sum((total_stats.get("kills") or {}).values())
-    season_kills = sum((season_stats.get("kills") or {}).values())
-    hero_runs = total_stats.get("hero_runs", {}) or {}
+    total_kills = sum(_as_dict(total_stats.get("kills")).values())
+    season_kills = sum(_as_dict(season_stats.get("kills")).values())
+    hero_runs = _as_dict(total_stats.get("hero_runs"))
     level, xp_current, xp_needed = xp_to_level(int(profile.get("xp", 0)))
     bar = progress_bar(xp_current, xp_needed)
     if is_admin:

@@ -167,7 +167,26 @@ docker compose up -d --build
 1) Остановить бота и сохранить текущий `ruins.db`.
 2) Создать пустую базу `ruins` в вашем PostgreSQL.
 3) Перенести данные утилитой pgloader (SQLite → PostgreSQL) или скриптом импорта.
-4) Проверить количество записей в `users`, `runs`, `user_stats`, `seasons` после миграции.
+4) Нормализовать JSON-поля после переноса (защита от двойной сериализации):
+
+```bash
+# dry-run (только отчет)
+set -a; source .env; set +a
+.venv/bin/python scripts/fix_postgres_json.py --dry-run
+
+# apply (внести изменения)
+set -a; source .env; set +a
+.venv/bin/python scripts/fix_postgres_json.py
+```
+
+Или через Makefile:
+
+```bash
+make migrate-json-check
+make migrate-json-fix
+```
+
+5) Проверить количество записей в `users`, `runs`, `user_stats`, `seasons` после миграции.
 
 ## Структура данных (PostgreSQL)
 

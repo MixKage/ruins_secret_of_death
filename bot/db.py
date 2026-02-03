@@ -188,7 +188,10 @@ class _Cursor:
 
 def _json_dict(value: Any) -> Dict[str, Any]:
     parsed = value
-    for _ in range(3):
+    for _ in range(10):
+        if isinstance(parsed, (bytes, bytearray, memoryview)):
+            parsed = bytes(parsed).decode("utf-8", errors="ignore")
+            continue
         if isinstance(parsed, str):
             raw = parsed.strip()
             if not raw:
@@ -204,7 +207,10 @@ def _json_dict(value: Any) -> Dict[str, Any]:
 
 def _json_list(value: Any) -> List[Any]:
     parsed = value
-    for _ in range(3):
+    for _ in range(10):
+        if isinstance(parsed, (bytes, bytearray, memoryview)):
+            parsed = bytes(parsed).decode("utf-8", errors="ignore")
+            continue
         if isinstance(parsed, str):
             raw = parsed.strip()
             if not raw:
