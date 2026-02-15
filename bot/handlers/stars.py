@@ -6,14 +6,12 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot import db
+from bot.api_client import stars_menu as api_stars_menu
+from bot.api_client import stars_validate as api_stars_validate
+from bot.api_client import stars_success as api_stars_success
 from bot.handlers.helpers import is_admin_user
-from bot.handlers.heroes import _unlock_state
-from bot.handlers.profile import build_profile_text
 from bot.keyboards import profile_kb
 from bot.game.logic import render_state
-from bot.progress import ensure_current_season, xp_for_level_increase, xp_to_level
-from bot.pricing import SECOND_CHANCE_STARS, STARS_PACKAGES, get_pack_price, get_second_chance_price
 from bot.utils.telegram import edit_or_send
 
 
@@ -23,22 +21,12 @@ STARS_CURRENCY = "XTR"
 STARS_PROVIDER_TOKEN = ""
 
 
-def _stars_text() -> str:
-    return "\n".join(
-        [
-            "<b>Уровни за ⭐</b>",
-            "Покупка повышает уровень ровно на выбранное число.",
-            "XP начисляется автоматически и учитывается в сезоне.",
-        ]
-    )
-
-
-def _stars_kb():
+def _stars_kb(packages: list[dict]):
     builder = InlineKeyboardBuilder()
-    for levels in sorted(STARS_PACKAGES):
-        pack = STARS_PACKAGES[levels]
-        stars = get_pack_price(levels)
-        label = str(pack["label"])
+    for entry in sorted(packages, key=lambda item: int(item.get("levels", 0))):
+        levels = int(entry.get("levels", 0))
+        stars = int(entry.get("stars", 0))
+        label = str(entry.get("label", ""))
         builder.button(
             text=f"{stars}⭐ — {label}",
             callback_data=f"stars:buy:{levels}",
@@ -67,8 +55,13 @@ def _parse_payload(payload: str) -> Tuple[str, int, int] | None:
 
 @router.callback_query(F.data == "profile:stars")
 async def stars_menu(callback: CallbackQuery) -> None:
+    response = await api_stars_menu()
     await callback.answer()
-    await edit_or_send(callback, _stars_text(), reply_markup=_stars_kb())
+    await edit_or_send(
+        callback,
+        response.get("text", ""),
+        reply_markup=_stars_kb(response.get("packages", [])),
+    )
 
 
 @router.callback_query(F.data.startswith("stars:buy:"))
@@ -84,12 +77,14 @@ async def stars_buy(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Неверный пакет.", show_alert=True)
         return
-    pack = STARS_PACKAGES.get(levels)
+    response = await api_stars_menu()
+    packages = response.get("packages", [])
+    pack = next((item for item in packages if int(item.get("levels", 0)) == levels), None)
     if not pack:
         await callback.answer("Пакет недоступен.", show_alert=True)
         return
-    stars = get_pack_price(levels)
-    label = str(pack["label"])
+    stars = int(pack.get("stars", 0))
+    label = str(pack.get("label", ""))
     payload = f"stars_levels:{callback.from_user.id}:{levels}"
     await callback.bot.send_invoice(
         chat_id=callback.from_user.id,
@@ -106,50 +101,19 @@ async def stars_buy(callback: CallbackQuery) -> None:
 @router.pre_checkout_query()
 async def stars_pre_checkout(query: PreCheckoutQuery) -> None:
     payload = query.invoice_payload or ""
-    parsed = _parse_payload(payload)
-    if not parsed:
+    if query.from_user is None:
         await query.answer(ok=False, error_message="Некорректный платеж.")
         return
-    kind, user_id, value = parsed
-    if query.from_user and query.from_user.id != user_id:
-        await query.answer(ok=False, error_message="Платеж не для этого пользователя.")
-        return
-    if kind == "levels":
-        pack = STARS_PACKAGES.get(value)
-        if not pack:
-            await query.answer(ok=False, error_message="Пакет недоступен.")
-            return
-        expected = get_pack_price(value)
-        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(expected):
-            await query.answer(ok=False, error_message="Неверная сумма оплаты.")
-            return
+    response = await api_stars_validate(
+        payload=payload,
+        telegram_id=query.from_user.id,
+        currency=query.currency,
+        total_amount=int(query.total_amount or 0),
+    )
+    if response.get("ok"):
         await query.answer(ok=True)
-        return
-    if kind == "second_chance":
-        expected = get_second_chance_price()
-        if query.currency != STARS_CURRENCY or int(query.total_amount or 0) != int(expected):
-            await query.answer(ok=False, error_message="Неверная сумма оплаты.")
-            return
-        user_row = await db.get_user_by_telegram(user_id)
-        if not user_row:
-            await query.answer(ok=False, error_message="Пользователь не найден.")
-            return
-        run_row = await db.get_run_by_id(value)
-        if not run_row:
-            await query.answer(ok=False, error_message="Забег не найден.")
-            return
-        run_user_id, is_active, state = run_row
-        if (
-            not is_active
-            or run_user_id != user_row[0]
-            or state.get("phase") != "second_chance_offer"
-            or state.get("second_chance_offer_type") != "buy"
-        ):
-            await query.answer(ok=False, error_message="Второй шанс недоступен.")
-            return
-        await query.answer(ok=True)
-        return
-    await query.answer(ok=False, error_message="Некорректный платеж.")
+    else:
+        await query.answer(ok=False, error_message=response.get("error_message") or "Некорректный платеж.")
 
 
 @router.message(F.successful_payment)
@@ -158,92 +122,31 @@ async def stars_success(message: Message) -> None:
     if user is None or message.successful_payment is None:
         return
     payment = message.successful_payment
-    parsed = _parse_payload(payment.invoice_payload or "")
-    if not parsed:
+    response = await api_stars_success(
+        payload=payment.invoice_payload or "",
+        telegram_id=user.id,
+        username=user.username,
+        telegram_charge_id=payment.telegram_payment_charge_id,
+        provider_charge_id=payment.provider_payment_charge_id,
+        currency=payment.currency,
+        total_amount=int(payment.total_amount or 0),
+    )
+    status = response.get("status")
+    if status == "levels":
+        message_text = response.get("message")
+        if message_text:
+            await message.answer(message_text)
+        profile_text = response.get("profile_text")
+        if profile_text:
+            await message.answer(profile_text, reply_markup=profile_kb(can_unlock=bool(response.get("can_unlock"))))
         return
-    kind, user_id, value = parsed
-    if user.id != user_id:
-        return
-    if kind == "levels":
-        levels = value
-        pack = STARS_PACKAGES.get(levels)
-        if not pack:
-            return
-        internal_user_id = await db.ensure_user(user_id, user.username)
-        charge_id = payment.telegram_payment_charge_id
-        if await db.has_star_purchase(charge_id):
-            return
-        profile = await db.get_user_profile(internal_user_id)
-        current_xp = int(profile.get("xp", 0)) if profile else 0
-        xp_added = xp_for_level_increase(current_xp, levels)
-        if xp_added <= 0:
-            return
-        await db.add_user_xp(internal_user_id, xp_added)
-        season_id, _ = await ensure_current_season()
-        await db.add_season_xp(internal_user_id, season_id, xp_added)
-        await db.record_star_purchase(
-            user_id=internal_user_id,
-            telegram_payment_charge_id=charge_id,
-            provider_payment_charge_id=payment.provider_payment_charge_id,
-            levels=levels,
-            stars=get_pack_price(levels),
-            xp_added=xp_added,
-        )
-        new_level, _current, _need = xp_to_level(current_xp + xp_added)
-        is_admin = is_admin_user(message.from_user)
-        unlocked_ids = await db.get_unlocked_heroes(internal_user_id)
-        _unlocked_set, available, required_level, _total_unlockable = _unlock_state(
-            new_level,
-            unlocked_ids,
-            is_admin=is_admin,
-        )
-        if available > 0:
-            slot_note = "Вам доступен новый слот открытия персонажа."
-        elif required_level:
-            remaining = max(0, required_level - new_level)
-            slot_note = f"Осталось уровней до нового слота персонажей: {remaining}."
-        else:
-            slot_note = "Все герои уже открыты."
-        await message.answer(
-            (
-                f"Спасибо, что поддержали наш проект! Поздравляем с успешной покупкой "
-                f"нового уровня (+{levels}). Теперь ваш уровень: <b>{new_level}</b>. {slot_note}"
+    if status == "second_chance":
+        state = response.get("state")
+        if state:
+            from bot.handlers.game import _markup_for_state
+            is_admin = is_admin_user(message.from_user)
+            await message.answer(
+                render_state(state),
+                reply_markup=_markup_for_state(state, is_admin=is_admin),
             )
-        )
-        profile_text, can_unlock = await build_profile_text(internal_user_id, is_admin=is_admin)
-        await message.answer(profile_text, reply_markup=profile_kb(can_unlock=can_unlock))
-        return
-    if kind == "second_chance":
-        run_id = value
-        internal_user_id = await db.ensure_user(user_id, user.username)
-        charge_id = payment.telegram_payment_charge_id
-        if await db.has_star_action(charge_id):
-            return
-        run_row = await db.get_run_by_id(run_id)
-        if not run_row:
-            return
-        run_user_id, is_active, state = run_row
-        if (
-            not is_active
-            or run_user_id != internal_user_id
-            or state.get("phase") != "second_chance_offer"
-            or state.get("second_chance_offer_type") != "buy"
-        ):
-            return
-        from bot.game.logic import apply_second_chance
-        from bot.handlers.game import _markup_for_state
-        apply_second_chance(state, note="Амулет второго шанса выкуплен: 1 HP и полный запас ОД.")
-        await db.update_run(run_id, state)
-        await db.record_star_action(
-            user_id=internal_user_id,
-            telegram_payment_charge_id=charge_id,
-            provider_payment_charge_id=payment.provider_payment_charge_id,
-            action="second_chance",
-            stars=get_second_chance_price(),
-        )
-        is_admin = is_admin_user(message.from_user)
-        await message.answer(
-            render_state(state),
-            reply_markup=_markup_for_state(state, is_admin=is_admin),
-        )
         return

@@ -1,28 +1,21 @@
 import asyncio
 import logging
-import json
-from html import escape
-from pathlib import Path
-from typing import List
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, BufferedInputFile, Message
 
-from bot import db
 from bot.config import get_admin_ids
-from bot.db import get_all_user_targets, get_broadcast_targets, mark_broadcast_sent
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import broadcast_menu_kb, main_menu_kb
-from bot.progress import (
-    BADGES,
-    SUMMARY_BADGES,
-    award_season_badges,
-    compute_season_winners,
-    season_key_for_number,
-    season_label,
-    season_month_label,
+from bot.api_client import (
+    get_active_run as api_get_active_run,
+    get_all_broadcast_targets as api_get_all_broadcast_targets,
+    get_broadcast_targets as api_get_broadcast_targets,
+    get_broadcast_photo as api_get_broadcast_photo,
+    get_season_summary as api_get_season_summary,
+    mark_broadcast_sent as api_mark_broadcast_sent,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,15 +60,15 @@ SERVER_CRASH_TEXT = (
     "<i>Если заметите странности, сообщите смотрителям.</i>"
 )
 
-BALANCE_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "balance_update.jpg"
-SEASON_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "season2.jpg"
-SERVER_CRASH_PHOTO_PATH = Path(__file__).resolve().parents[2] / "assets" / "server_crashed.jpg"
+BALANCE_PHOTO_KEY = "balance_update"
+SEASON_PHOTO_KEY = "season_update"
+SERVER_CRASH_PHOTO_KEY = "server_crash"
 
 
-async def _send_balance_update(message: Message, telegram_id: int, photo_exists: bool) -> None:
+async def _send_balance_update(message: Message, telegram_id: int, photo_bytes: bytes | None) -> None:
     markup = broadcast_menu_kb()
-    if photo_exists:
-        photo = FSInputFile(str(BALANCE_PHOTO_PATH))
+    if photo_bytes:
+        photo = BufferedInputFile(photo_bytes, filename="balance_update.jpg")
         await message.bot.send_photo(
             telegram_id,
             photo,
@@ -85,10 +78,10 @@ async def _send_balance_update(message: Message, telegram_id: int, photo_exists:
     else:
         await message.bot.send_message(telegram_id, BALANCE_UPDATE_TEXT, reply_markup=markup)
 
-async def _send_season_update(message: Message, telegram_id: int, photo_exists: bool) -> None:
+async def _send_season_update(message: Message, telegram_id: int, photo_bytes: bytes | None) -> None:
     markup = broadcast_menu_kb()
-    if photo_exists:
-        photo = FSInputFile(str(SEASON_PHOTO_PATH))
+    if photo_bytes:
+        photo = BufferedInputFile(photo_bytes, filename="season2.jpg")
         await message.bot.send_photo(
             telegram_id,
             photo,
@@ -110,21 +103,29 @@ async def balance_update(message: Message) -> None:
         await message.answer("Команда недоступна.")
         return
 
-    targets = await get_broadcast_targets(BALANCE_BROADCAST_KEY)
+    response = await api_get_broadcast_targets(BALANCE_BROADCAST_KEY)
+    targets = response.get("targets", [])
     if not targets:
         await message.answer("Нет пользователей для рассылки.")
         return
 
-    photo_exists = BALANCE_PHOTO_PATH.exists()
+    try:
+        balance_photo_bytes = await api_get_broadcast_photo(BALANCE_PHOTO_KEY)
+    except Exception:
+        balance_photo_bytes = None
     sent = 0
     failed = 0
 
     await message.answer(f"Начинаю рассылку: {len(targets)} пользователей.")
 
-    for user_id, telegram_id in targets:
+    for entry in targets:
+        user_id = entry.get("user_id")
+        telegram_id = entry.get("telegram_id")
+        if not user_id or not telegram_id:
+            continue
         try:
-            await _send_balance_update(message, telegram_id, photo_exists)
-            await mark_broadcast_sent(user_id, BALANCE_BROADCAST_KEY)
+            await _send_balance_update(message, telegram_id, balance_photo_bytes)
+            await api_mark_broadcast_sent(user_id, BALANCE_BROADCAST_KEY)
             sent += 1
         except TelegramRetryAfter as exc:
             logger.info(
@@ -134,8 +135,8 @@ async def balance_update(message: Message) -> None:
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                await _send_balance_update(message, telegram_id, photo_exists)
-                await mark_broadcast_sent(user_id, BALANCE_BROADCAST_KEY)
+                await _send_balance_update(message, telegram_id, balance_photo_bytes)
+                await api_mark_broadcast_sent(user_id, BALANCE_BROADCAST_KEY)
                 sent += 1
             except (TelegramForbiddenError, TelegramBadRequest):
                 failed += 1
@@ -157,21 +158,29 @@ async def season_update(message: Message) -> None:
         await message.answer("Команда недоступна.")
         return
 
-    targets = await get_broadcast_targets(SEASON_BROADCAST_KEY)
+    response = await api_get_broadcast_targets(SEASON_BROADCAST_KEY)
+    targets = response.get("targets", [])
     if not targets:
         await message.answer("Нет пользователей для рассылки.")
         return
 
-    photo_exists = SEASON_PHOTO_PATH.exists()
+    try:
+        season_photo_bytes = await api_get_broadcast_photo(SEASON_PHOTO_KEY)
+    except Exception:
+        season_photo_bytes = None
     sent = 0
     failed = 0
 
     await message.answer(f"Начинаю рассылку: {len(targets)} пользователей.")
 
-    for user_id, telegram_id in targets:
+    for entry in targets:
+        user_id = entry.get("user_id")
+        telegram_id = entry.get("telegram_id")
+        if not user_id or not telegram_id:
+            continue
         try:
-            await _send_season_update(message, telegram_id, photo_exists)
-            await mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
+            await _send_season_update(message, telegram_id, season_photo_bytes)
+            await api_mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
             sent += 1
         except TelegramRetryAfter as exc:
             logger.info(
@@ -181,8 +190,8 @@ async def season_update(message: Message) -> None:
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                await _send_season_update(message, telegram_id, photo_exists)
-                await mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
+                await _send_season_update(message, telegram_id, season_photo_bytes)
+                await api_mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
                 sent += 1
             except (TelegramForbiddenError, TelegramBadRequest):
                 failed += 1
@@ -194,17 +203,24 @@ async def season_update(message: Message) -> None:
 
 
 async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
-    targets = await get_all_user_targets()
+    response = await api_get_all_broadcast_targets()
+    targets = response.get("targets", [])
     if not targets:
         return 0, 0, 0
-    photo_exists = SERVER_CRASH_PHOTO_PATH.exists()
+    try:
+        crash_photo_bytes = await api_get_broadcast_photo(SERVER_CRASH_PHOTO_KEY)
+    except Exception:
+        crash_photo_bytes = None
     sent = 0
     failed = 0
 
-    for _, telegram_id in targets:
+    for entry in targets:
+        telegram_id = entry.get("telegram_id")
+        if not telegram_id:
+            continue
         try:
-            if photo_exists:
-                photo = FSInputFile(str(SERVER_CRASH_PHOTO_PATH))
+            if crash_photo_bytes:
+                photo = BufferedInputFile(crash_photo_bytes, filename="server_crashed.jpg")
                 await bot.send_photo(telegram_id, photo, caption=SERVER_CRASH_TEXT)
             else:
                 await bot.send_message(telegram_id, SERVER_CRASH_TEXT)
@@ -217,8 +233,8 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                if photo_exists:
-                    photo = FSInputFile(str(SERVER_CRASH_PHOTO_PATH))
+                if crash_photo_bytes:
+                    photo = BufferedInputFile(crash_photo_bytes, filename="server_crashed.jpg")
                     await bot.send_photo(telegram_id, photo, caption=SERVER_CRASH_TEXT)
                 else:
                     await bot.send_message(telegram_id, SERVER_CRASH_TEXT)
@@ -237,111 +253,22 @@ async def send_season_summary_broadcast(
     season_number: int,
     recalc: bool,
 ) -> tuple[int, int, int]:
-    season_key = season_key_for_number(season_number)
-    season = await db.get_season_by_key(season_key)
-    if not season:
+    response = await api_get_season_summary(season_number, recalc)
+    if response.get("status") != "ok":
         return 0, 0, 0
-    season_id = season[0]
-
-    if recalc:
-        await award_season_badges(season_id, season_key)
-
-    rows = await db.get_season_stats_rows(season_id)
-    if not rows:
-        return 0, 0, 0
-
-    winners = compute_season_winners(rows)
-    summary = {"players": len(rows)}
-    await db.save_season_history(
-        season_id,
-        season_number,
-        season_key,
-        json.dumps(winners, ensure_ascii=False),
-        json.dumps(summary, ensure_ascii=False),
-    )
-
-    winner_ids: List[int] = []
-    for badge_id in SUMMARY_BADGES:
-        winner_ids.extend(winners.get(badge_id, []))
-    winner_map = await db.get_users_by_ids(sorted(set(winner_ids)))
-
-    winners_lines = []
-    for badge_id in SUMMARY_BADGES:
-        badge = BADGES.get(badge_id)
-        if not badge:
-            continue
-        names = []
-        for user_id in winners.get(badge_id, []):
-            username = winner_map.get(user_id, (None, 0))[0]
-            names.append(escape(username) if username else "Без имени")
-        names_text = ", ".join(names) if names else "—"
-        winners_lines.append(f"• Знак \"{badge.name}\": {names_text}")
-
-    player_rows = await db.get_season_player_rows(season_id)
-    active_rows = [
-        row
-        for row in player_rows
-        if row.get("total_runs", 0) > 0 or row.get("max_floor", 0) > 0
-    ]
-    if not active_rows:
-        return 0, 0, 0
-
-    ranked = sorted(active_rows, key=lambda item: (-int(item.get("max_floor", 0)), item["user_id"]))
-    ranks = {row["user_id"]: idx for idx, row in enumerate(ranked, start=1)}
+    entries = response.get("entries", [])
 
     sent = 0
     failed = 0
-    total = len(active_rows)
-    season_title = f"{season_label(season_key)} ({season_month_label(season_key)})"
+    total = len(entries)
 
-    for row in active_rows:
-        user_id = row["user_id"]
-        telegram_id = row["telegram_id"]
-        if not telegram_id:
+    for entry in entries:
+        telegram_id = entry.get("telegram_id")
+        text = entry.get("text")
+        if not telegram_id or not text:
             continue
-
-        total_kills = sum((row.get("kills") or {}).values())
-        rank = ranks.get(user_id)
-
-        badge_rows = await db.get_user_badges(user_id)
-        earned = []
-        badge_xp = 0
-        for entry in badge_rows:
-            badge_id = entry.get("badge_id")
-            if entry.get("last_awarded_season") != season_key:
-                continue
-            badge = BADGES.get(badge_id)
-            if not badge or not badge.seasonal:
-                continue
-            earned.append(f"- {badge.name} (+{badge.xp} XP)")
-            badge_xp += badge.xp
-        if not earned:
-            earned = ["- Нет наград"]
-
-        season_xp = int(row.get("xp_gained", 0)) + badge_xp
-        lines = [
-            f"🏆 Итоги {season_title}!",
-            "Спасибо за вашу активность!",
-            "",
-            "Ваша личная статистика:",
-            f"• Забегов сыграно: {row.get('total_runs', 0)}",
-            f"• Лучший этаж: {row.get('max_floor', 0)}",
-            f"• Убийств: {total_kills}",
-            f"• Место в рейтинге: {rank or '—'}",
-            f"• Набранный опыт: {season_xp} XP",
-            f"• Сундуков открыто: {row.get('chests_opened', 0)}",
-            f"• Сокровищ найдено: {row.get('treasures_found', 0)}",
-            "",
-            "Ваши награды сезона:",
-            *earned,
-            "",
-            f"🏅 Обладатели наград {season_label(season_key)}:",
-            *winners_lines,
-            "",
-            f"{season_label(season_key_for_number(season_number + 1))} уже начался! Удачи в боях!",
-        ]
         try:
-            await bot.send_message(telegram_id, "\n".join(lines))
+            await bot.send_message(telegram_id, text)
             sent += 1
         except TelegramRetryAfter as exc:
             logger.info(
@@ -351,7 +278,7 @@ async def send_season_summary_broadcast(
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                await bot.send_message(telegram_id, "\n".join(lines))
+                await bot.send_message(telegram_id, text)
                 sent += 1
             except (TelegramForbiddenError, TelegramBadRequest):
                 failed += 1
@@ -367,10 +294,8 @@ async def broadcast_menu_callback(callback: CallbackQuery) -> None:
     user = callback.from_user
     if user is None:
         return
-    user_row = await db.get_user_by_telegram(user.id)
-    has_active = False
-    if user_row:
-        has_active = bool(await db.get_active_run(user_row[0]))
+    active = await api_get_active_run(user.id)
+    has_active = bool(active.get("run_id"))
     await callback.answer()
     is_admin = is_admin_user(callback.from_user)
     await callback.bot.send_message(

@@ -10,7 +10,6 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from bot.config import get_bot_token
-from bot.db import init_db
 from bot.handlers import (
     admin_router,
     broadcast_router,
@@ -31,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     try:
-        await init_db()
         bot = Bot(token=get_bot_token(), default=DefaultBotProperties(parse_mode="HTML"))
         dispatcher = Dispatcher()
         dispatcher.include_router(start_router)
