@@ -15,12 +15,32 @@ def main_menu_kb(has_active_run: bool = False, is_admin: bool = False) -> Inline
     builder.button(text="Рейтинг", callback_data="menu:leaderboard")
     builder.button(text="Сюжет", callback_data="menu:story")
     builder.button(text="Правила", callback_data="menu:rules")
+    builder.button(text="Обратная связь", callback_data="menu:feedback")
     builder.button(text="Статистика", callback_data="menu:stats")
     builder.button(text="Личный кабинет", callback_data="menu:profile")
     if not has_active_run:
         builder.button(text="Поделиться", callback_data="menu:share")
     if is_admin:
         builder.button(text="Админ панель", callback_data="menu:admin")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def feedback_categories_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Баг", callback_data="feedback:category:bug")
+    builder.button(text="Баланс", callback_data="feedback:category:balance")
+    builder.button(text="Идея", callback_data="feedback:category:idea")
+    builder.button(text="Другое", callback_data="feedback:category:other")
+    builder.button(text="Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def feedback_input_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Сменить категорию", callback_data="feedback:change_category")
+    builder.button(text="Отмена", callback_data="feedback:cancel")
     builder.adjust(1)
     return builder.as_markup()
 

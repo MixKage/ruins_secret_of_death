@@ -199,6 +199,30 @@ async def get_share(telegram_id: int) -> Dict[str, Any]:
         return response.json()
 
 
+async def create_feedback(
+    telegram_id: int,
+    username: str | None,
+    category: str,
+    message: str,
+    source: str = "menu",
+    run_id: int | None = None,
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    payload = {
+        "telegram_id": telegram_id,
+        "username": username,
+        "category": category,
+        "message": message,
+        "source": source,
+        "run_id": run_id,
+        "context": context or {},
+    }
+    async with _client() as client:
+        response = await client.post("/v1/feedback", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
 async def get_broadcast_targets(broadcast_key: str) -> Dict[str, Any]:
     async with _client() as client:
         response = await client.get("/v1/broadcast/targets", params={"broadcast_key": broadcast_key})

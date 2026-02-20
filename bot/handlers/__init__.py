@@ -1,5 +1,6 @@
 from .admin import router as admin_router
 from .broadcast import router as broadcast_router
+from .feedback import router as feedback_router
 from .game import router as game_router
 from .leaderboard import router as leaderboard_router
 from .heroes import router as heroes_router
@@ -20,6 +21,7 @@ __all__ = [
     "share_router",
     "stats_router",
     "broadcast_router",
+    "feedback_router",
     "admin_router",
     "profile_router",
     "stars_router",

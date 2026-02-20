@@ -13,6 +13,7 @@ from bot.config import get_bot_token
 from bot.handlers import (
     admin_router,
     broadcast_router,
+    feedback_router,
     game_router,
     heroes_router,
     leaderboard_router,
@@ -35,6 +36,7 @@ async def main() -> None:
         dispatcher.include_router(start_router)
         dispatcher.include_router(admin_router)
         dispatcher.include_router(broadcast_router)
+        dispatcher.include_router(feedback_router)
         dispatcher.include_router(game_router)
         dispatcher.include_router(heroes_router)
         dispatcher.include_router(leaderboard_router)
