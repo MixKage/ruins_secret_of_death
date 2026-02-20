@@ -1,3 +1,6 @@
+import logging
+
+import httpx
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, BufferedInputFile, Message, LabeledPrice
@@ -35,6 +38,8 @@ from bot.api_client import get_story_chapter as api_get_story_chapter
 from bot.api_client import get_story_photo as api_get_story_photo
 
 router = Router()
+logger = logging.getLogger(__name__)
+API_CONNECTION_ERROR_TEXT = "Проблема соединения с сервером. Попробуйте ещё раз."
 
 def _pop_tutorial_alert(state: dict) -> str | None:
     return state.pop("tutorial_alert", None)
@@ -45,6 +50,19 @@ async def _answer_tutorial_alert(callback: CallbackQuery, alert: str | None) -> 
         await callback.answer(alert, show_alert=True)
         return
     await callback.answer()
+
+
+async def _answer_api_error(callback: CallbackQuery) -> None:
+    try:
+        await callback.answer(API_CONNECTION_ERROR_TEXT, show_alert=True)
+        return
+    except Exception:
+        pass
+    if callback.from_user:
+        try:
+            await callback.bot.send_message(callback.from_user.id, API_CONNECTION_ERROR_TEXT)
+        except Exception:
+            pass
 
 async def _show_main_menu(callback: CallbackQuery, text: str = "Главное меню") -> None:
     is_admin = is_admin_user(callback.from_user)
@@ -133,11 +151,16 @@ async def _apply_api_action(callback: CallbackQuery, action: str) -> None:
     user = callback.from_user
     if user is None:
         return
-    response = await api_run_action(
-        user.id,
-        user.username,
-        action,
-    )
+    try:
+        response = await api_run_action(
+            user.id,
+            user.username,
+            action,
+        )
+    except httpx.HTTPError:
+        logger.warning("API action failed: %s", action, exc_info=True)
+        await _answer_api_error(callback)
+        return
     alert = response.get("alert")
     show_alert = bool(response.get("show_alert"))
     if alert:
@@ -313,7 +336,12 @@ async def continue_run(callback: CallbackQuery) -> None:
     user = callback.from_user
     if user is None:
         return
-    active = await api_get_active_run(user.id)
+    try:
+        active = await api_get_active_run(user.id)
+    except httpx.HTTPError:
+        logger.warning("Failed to load active run for user=%s", user.id, exc_info=True)
+        await _answer_api_error(callback)
+        return
     run_id = active.get("run_id")
     state = active.get("state")
     kind = active.get("kind")
@@ -347,7 +375,12 @@ async def reset_handler(message: Message) -> None:
     user = message.from_user
     if user is None:
         return
-    active = await api_get_active_run(user.id)
+    try:
+        active = await api_get_active_run(user.id)
+    except httpx.HTTPError:
+        logger.warning("Failed to load active run for reset user=%s", user.id, exc_info=True)
+        await message.answer(API_CONNECTION_ERROR_TEXT)
+        return
     state = active.get("state")
     if not state:
         is_admin = is_admin_user(message.from_user)

@@ -9,9 +9,19 @@ from bot.api_client import unlock_hero as api_unlock_hero
 from bot.api_client import get_hero_photo as api_get_hero_photo
 from bot.game.characters import CHARACTERS, get_character
 from bot.keyboards import hero_detail_kb, heroes_menu_kb
-from bot.utils.telegram import edit_or_send
+from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
+
+
+async def _show_loading(callback: CallbackQuery) -> None:
+    message = callback.message
+    if not message or not message.text:
+        return
+    try:
+        await safe_edit_text(message, "Загрузка...", reply_markup=None)
+    except Exception:
+        return
 
 
 async def show_heroes_menu(callback: CallbackQuery, user_id: int, source: str = "menu") -> None:
@@ -82,6 +92,7 @@ async def hero_info_callback(callback: CallbackQuery) -> None:
         await show_heroes_menu(callback, user.id, source=source)
         return
     await callback.answer()
+    await _show_loading(callback)
     await _show_hero_detail(callback, user.id, hero_id, source)
 
 
