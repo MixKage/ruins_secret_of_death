@@ -10,6 +10,8 @@ from bot.config import get_admin_ids
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import broadcast_menu_kb, main_menu_kb
 from bot.api_client import (
+    admin_news_mark_sent as api_admin_news_mark_sent,
+    admin_news_start as api_admin_news_start,
     get_active_run as api_get_active_run,
     get_all_broadcast_targets as api_get_all_broadcast_targets,
     get_broadcast_targets as api_get_broadcast_targets,
@@ -22,7 +24,6 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 BALANCE_BROADCAST_KEY = "balance_update_v1"
-SEASON_BROADCAST_KEY = "season_update_v2"
 BROADCAST_KEY = BALANCE_BROADCAST_KEY
 
 BALANCE_UPDATE_TEXT = (
@@ -40,17 +41,15 @@ BALANCE_UPDATE_TEXT = (
 )
 
 SEASON_UPDATE_TEXT = (
-    "<b>Season 2: руины открывают новые пути</b>\n"
-    "Сезон обновлен — готовьтесь к новым тактикам.\n"
-    "- В игре теперь <b>7 уникальных героев</b> наделенных собственной техникой боя.\n"
-    "- Добавлено обучение для новых путников руин.\n"
-    "- Добавлены сюжетные главы и новые противники.\n"
-    "- Добавлены испытания руин, дающие за выполнение XP.\n"
-    "- Добавлен амулет второго шанса и другие улучшения.\n"    
-    "- Обновлен внутриигровой баланс.\n"
-    "- Появилась возможность поддержать проект.\n"
-    "- Улучшены правила и справка, подсказки стали понятнее.\n\n"
-    "<i>Сезон 2 открыт. Выберите героя и верните себе имя в руинах.</i>"
+    "<b>Сезон 3 в Руинах уже близко.</b>\n"
+    "Мы не просто обновили цифры, мы пересобрали игру изнутри:\n"
+    "- <b>Ребаланс прогрессии</b> — ранние и средние этажи стали ровнее по темпу, меньше “автопилота”, больше решений в бою.\n"
+    "- <b>Новый босс: Хранитель Барьера</b> — встретит тех, кто заходит слишком глубоко и проверит, достоин ли ты идти дальше.\n"
+    "- <b>Система отзывов</b> — теперь можно оставлять фидбек прямо в игре, чтобы мы быстрее правили баланс и UX по живым данным.\n"
+    "- <b>Полностью переписанная архитектура</b> — проект переведён на новую backend-основу, API вынесено отдельно для стабильности и масштабирования.\n"
+    "- <b>Что дальше</b> — скоро новые клиенты: <b>VK</b> и <b>Web</b>.\n\n"    
+    "Сезон 3 — это новый фундамент Руин.\n"
+    "<i>Поднимешься в таблице лидеров или пополнишь ряды павших?</i>"
 )
 
 SERVER_CRASH_TEXT = (
@@ -61,7 +60,7 @@ SERVER_CRASH_TEXT = (
 )
 
 BALANCE_PHOTO_KEY = "balance_update"
-SEASON_PHOTO_KEY = "season_update"
+SEASON_PHOTO_KEY = "season3"
 SERVER_CRASH_PHOTO_KEY = "server_crash"
 
 
@@ -90,6 +89,61 @@ async def _send_season_update(message: Message, telegram_id: int, photo_bytes: b
         )
     else:
         await message.bot.send_message(telegram_id, SEASON_UPDATE_TEXT, reply_markup=markup)
+
+
+async def _run_news_broadcast(message: Message) -> None:
+    user = message.from_user
+    if user is None:
+        return
+
+    admins = get_admin_ids()
+    if admins and user.id not in admins:
+        await message.answer("Команда недоступна.")
+        return
+
+    response = await api_admin_news_start(user.id)
+    targets = response.get("targets", [])
+    if not targets:
+        await message.answer("Нет пользователей для рассылки.")
+        return
+
+    photo_key = response.get("photo_key") or SEASON_PHOTO_KEY
+    try:
+        season_photo_bytes = await api_get_broadcast_photo(photo_key)
+    except Exception:
+        season_photo_bytes = None
+    sent = 0
+    failed = 0
+
+    await message.answer(f"Начинаю рассылку: {len(targets)} пользователей.")
+
+    for entry in targets:
+        user_id = entry.get("user_id")
+        telegram_id = entry.get("telegram_id")
+        if not user_id or not telegram_id:
+            continue
+        try:
+            await _send_season_update(message, telegram_id, season_photo_bytes)
+            await api_admin_news_mark_sent(user.id, user_id)
+            sent += 1
+        except TelegramRetryAfter as exc:
+            logger.info(
+                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
+                exc.retry_after,
+                telegram_id,
+            )
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await _send_season_update(message, telegram_id, season_photo_bytes)
+                await api_admin_news_mark_sent(user.id, user_id)
+                sent += 1
+            except (TelegramForbiddenError, TelegramBadRequest):
+                failed += 1
+        except (TelegramForbiddenError, TelegramBadRequest):
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    await message.answer(f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
 
 
 @router.message(Command("balance_update"))
@@ -149,57 +203,12 @@ async def balance_update(message: Message) -> None:
 
 @router.message(Command("season_update"))
 async def season_update(message: Message) -> None:
-    user = message.from_user
-    if user is None:
-        return
+    await _run_news_broadcast(message)
 
-    admins = get_admin_ids()
-    if admins and user.id not in admins:
-        await message.answer("Команда недоступна.")
-        return
 
-    response = await api_get_broadcast_targets(SEASON_BROADCAST_KEY)
-    targets = response.get("targets", [])
-    if not targets:
-        await message.answer("Нет пользователей для рассылки.")
-        return
-
-    try:
-        season_photo_bytes = await api_get_broadcast_photo(SEASON_PHOTO_KEY)
-    except Exception:
-        season_photo_bytes = None
-    sent = 0
-    failed = 0
-
-    await message.answer(f"Начинаю рассылку: {len(targets)} пользователей.")
-
-    for entry in targets:
-        user_id = entry.get("user_id")
-        telegram_id = entry.get("telegram_id")
-        if not user_id or not telegram_id:
-            continue
-        try:
-            await _send_season_update(message, telegram_id, season_photo_bytes)
-            await api_mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
-            sent += 1
-        except TelegramRetryAfter as exc:
-            logger.info(
-                "Broadcast rate limit: waiting %.2f seconds before retry (telegram_id=%s)",
-                exc.retry_after,
-                telegram_id,
-            )
-            await asyncio.sleep(exc.retry_after)
-            try:
-                await _send_season_update(message, telegram_id, season_photo_bytes)
-                await api_mark_broadcast_sent(user_id, SEASON_BROADCAST_KEY)
-                sent += 1
-            except (TelegramForbiddenError, TelegramBadRequest):
-                failed += 1
-        except (TelegramForbiddenError, TelegramBadRequest):
-            failed += 1
-        await asyncio.sleep(0.05)
-
-    await message.answer(f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
+@router.message(Command("news"))
+async def news(message: Message) -> None:
+    await _run_news_broadcast(message)
 
 
 async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:

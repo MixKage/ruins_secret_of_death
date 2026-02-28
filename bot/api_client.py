@@ -279,3 +279,18 @@ async def admin_season_advance(telegram_id: int) -> Dict[str, Any]:
         response = await client.post("/v1/admin/season/advance", params={"telegram_id": telegram_id})
         response.raise_for_status()
         return response.json()
+
+
+async def admin_news_start(telegram_id: int) -> Dict[str, Any]:
+    async with _client() as client:
+        response = await client.post("/v1/admin/news", params={"telegram_id": telegram_id})
+        response.raise_for_status()
+        return response.json()
+
+
+async def admin_news_mark_sent(telegram_id: int, user_id: int) -> Dict[str, Any]:
+    payload = {"user_id": user_id}
+    async with _client() as client:
+        response = await client.post("/v1/admin/news/sent", params={"telegram_id": telegram_id}, json=payload)
+        response.raise_for_status()
+        return response.json()
