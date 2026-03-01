@@ -95,14 +95,27 @@ async def _run_news_broadcast(message: Message) -> None:
     user = message.from_user
     if user is None:
         return
+    logger.info("news command received: telegram_id=%s", user.id)
 
     admins = get_admin_ids()
     if admins and user.id not in admins:
+        logger.info("news command denied: telegram_id=%s is not admin", user.id)
         await message.answer("Команда недоступна.")
         return
 
-    response = await api_admin_news_start(user.id)
+    try:
+        response = await api_admin_news_start(user.id)
+    except Exception:
+        logger.exception("news command failed: admin/news request failed")
+        await message.answer("Не удалось запустить рассылку: API недоступен.")
+        return
+
     targets = response.get("targets", [])
+    logger.info(
+        "news command targets loaded: telegram_id=%s count=%s",
+        user.id,
+        len(targets),
+    )
     if not targets:
         await message.answer("Нет пользователей для рассылки.")
         return
@@ -141,8 +154,12 @@ async def _run_news_broadcast(message: Message) -> None:
                 failed += 1
         except (TelegramForbiddenError, TelegramBadRequest):
             failed += 1
+        except Exception:
+            logger.exception("news broadcast unexpected error: user_id=%s telegram_id=%s", user_id, telegram_id)
+            failed += 1
         await asyncio.sleep(0.05)
 
+    logger.info("news command done: telegram_id=%s sent=%s failed=%s", user.id, sent, failed)
     await message.answer(f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
 
 
