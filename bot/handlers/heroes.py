@@ -14,6 +14,42 @@ from bot.utils.telegram import edit_or_send, safe_edit_text
 router = Router()
 
 
+def _normalize_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    for _ in range(3):
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+            text = text[1:-1].strip()
+            continue
+        break
+    return text or None
+
+
+def _normalize_unlocked_ids(values: object) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    result: set[str] = set()
+    for item in values:
+        hero_id = _normalize_id(item)
+        if hero_id:
+            result.add(hero_id)
+    result.add("wanderer")
+    return result
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
 async def _show_loading(callback: CallbackQuery) -> None:
     message = callback.message
     if not message or not message.text:
@@ -26,7 +62,7 @@ async def _show_loading(callback: CallbackQuery) -> None:
 
 async def show_heroes_menu(callback: CallbackQuery, user_id: int, source: str = "menu") -> None:
     response = await api_get_heroes_menu(user_id)
-    unlocked_ids = set(response.get("unlocked_ids", []))
+    unlocked_ids = _normalize_unlocked_ids(response.get("unlocked_ids"))
     text = response.get("text", "<i>Герои недоступны.</i>")
     await edit_or_send(
         callback,
@@ -41,10 +77,10 @@ async def _show_hero_detail(callback: CallbackQuery, user_id: int, hero_id: str,
     text = response.get("text", f"<b>{character.get('name', 'Герой')}</b>")
     markup = hero_detail_kb(
         hero_id=hero_id,
-        is_unlocked=bool(response.get("is_unlocked")),
-        can_unlock=bool(response.get("can_unlock")),
+        is_unlocked=_as_bool(response.get("is_unlocked")),
+        can_unlock=_as_bool(response.get("can_unlock")),
         required_level=response.get("required_level"),
-        allow_stars=bool(response.get("allow_stars")),
+        allow_stars=_as_bool(response.get("allow_stars")),
         source=source,
     )
     chat_id = callback.from_user.id if callback.from_user else None
@@ -116,7 +152,7 @@ async def hero_unlock_callback(callback: CallbackQuery) -> None:
         await stars_menu_callback(callback)
         return
     detail = response.get("detail") or {}
-    await callback.answer("Герой открыт." if detail.get("is_unlocked") else "")
+    await callback.answer("Герой открыт." if _as_bool(detail.get("is_unlocked")) else "")
     await _show_hero_detail(callback, user.id, hero_id, source)
 
 
