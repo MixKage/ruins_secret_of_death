@@ -103,6 +103,8 @@ async def _run_news_broadcast(message: Message) -> None:
         await message.answer("Команда недоступна.")
         return
 
+    await message.answer("Запускаю рассылку новостей...")
+
     try:
         response = await api_admin_news_start(user.id)
     except Exception:
@@ -218,12 +220,7 @@ async def balance_update(message: Message) -> None:
     await message.answer(f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
 
 
-@router.message(Command("season_update"))
-async def season_update(message: Message) -> None:
-    await _run_news_broadcast(message)
-
-
-@router.message(Command("news"))
+@router.message(Command(commands=["news", "season_update"]))
 async def news(message: Message) -> None:
     await _run_news_broadcast(message)
 
