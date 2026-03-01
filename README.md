@@ -150,17 +150,22 @@ cp .env.example .env
 
 BOT_TOKEN="<token>"
 ADMIN_IDS="123,456"
-DATABASE_URL="postgresql://user:pass@host:5432/ruins"
+API_BOT_TOKEN="<secret>"
 BOT_TEST_MODE="0"
 ```
 
-2) Собрать и запустить контейнер:
+2) Убедитесь, что API поднято отдельно (см. `ruins_secret_of_death_api/README.md`).
+   По умолчанию бот обращается к API по `http://host.docker.internal:8000`.
+   Если API запущено на другом хосте/порту — задайте `API_BASE_URL` в `.env`.
+
+3) Собрать и запустить контейнер бота:
 
 ```bash
 docker compose up -d --build
 ```
 
-3) Бот подключается к внешнему PostgreSQL через `DATABASE_URL`.
+4) Игровые данные и изображения хранятся в API‑репозитории `ruins_secret_of_death_api/data` и `ruins_secret_of_death_api/assets`
+и упакованы в Docker‑образ API (без внешних mount‑ов).
 
 ## Миграция из SQLite (опционально)
 
