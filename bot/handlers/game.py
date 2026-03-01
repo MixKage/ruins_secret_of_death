@@ -260,9 +260,8 @@ async def _apply_api_action(callback: CallbackQuery, action: str) -> None:
             response.get("story_chapters") or [],
             response.get("story_max_chapter"),
         )
-        target_user_id = response.get("user_id")
-        if callback.from_user and target_user_id:
-            await show_heroes_menu(callback, int(target_user_id), source="menu")
+        if callback.from_user:
+            await show_heroes_menu(callback, callback.from_user.id, source="menu")
         return
 
 
