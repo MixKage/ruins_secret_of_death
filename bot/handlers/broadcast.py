@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+import httpx
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
@@ -107,6 +108,13 @@ async def _run_news_broadcast(message: Message) -> None:
 
     try:
         response = await api_admin_news_start(user.id)
+    except httpx.HTTPStatusError as exc:
+        logger.exception("news command failed: admin/news request failed")
+        if exc.response.status_code == 403:
+            await message.answer("API отклонил доступ: ваш telegram_id не в ADMIN_IDS на стороне API.")
+            return
+        await message.answer("Не удалось запустить рассылку: API вернул ошибку.")
+        return
     except Exception:
         logger.exception("news command failed: admin/news request failed")
         await message.answer("Не удалось запустить рассылку: API недоступен.")

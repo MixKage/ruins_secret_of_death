@@ -1,6 +1,13 @@
 import os
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1].strip()
+    return text
+
+
 def get_bot_token() -> str:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
@@ -9,12 +16,12 @@ def get_bot_token() -> str:
 
 
 def get_admin_ids() -> set[int]:
-    raw = os.getenv("ADMIN_IDS", "")
+    raw = _strip_wrapping_quotes(os.getenv("ADMIN_IDS", ""))
     if not raw.strip():
         return set()
     ids = set()
     for part in raw.split(","):
-        part = part.strip()
+        part = _strip_wrapping_quotes(part)
         if not part:
             continue
         try:
