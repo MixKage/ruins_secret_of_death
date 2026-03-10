@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  REGISTRY: ghcr.io
+  REGISTRY: ${{ secrets.REGISTRY_URL }}
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -55,12 +55,6 @@ jobs:
         host: ${{ secrets.SERVER_HOST }}
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-          docker stop my-app || true
-          docker rm my-app || true
-          docker run -d \
-            --name my-app \
-            -p 80:8080 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+        script: 
+
 
