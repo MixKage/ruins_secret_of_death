@@ -7,11 +7,13 @@ from bot.api_client import get_heroes_menu as api_get_heroes_menu
 from bot.api_client import get_hero_detail as api_get_hero_detail
 from bot.api_client import unlock_hero as api_unlock_hero
 from bot.api_client import get_hero_photo as api_get_hero_photo
+from bot.config import is_image_sending_enabled
 from bot.game.characters import CHARACTERS, get_character
 from bot.keyboards import hero_detail_kb, heroes_menu_kb
 from bot.utils.telegram import edit_or_send, safe_edit_text
 
 router = Router()
+SEND_IMAGES = is_image_sending_enabled()
 
 
 def _normalize_id(value: object) -> str | None:
@@ -86,7 +88,7 @@ async def _show_hero_detail(callback: CallbackQuery, user_id: int, hero_id: str,
     chat_id = callback.from_user.id if callback.from_user else None
     if chat_id is None and callback.message:
         chat_id = callback.message.chat.id
-    if chat_id is not None:
+    if SEND_IMAGES and chat_id is not None:
         try:
             photo_bytes = await api_get_hero_photo(hero_id)
         except Exception:

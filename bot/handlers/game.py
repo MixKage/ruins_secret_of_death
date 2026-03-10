@@ -5,6 +5,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, BufferedInputFile, Message, LabeledPrice
 
+from bot.config import is_image_sending_enabled
 from bot.game.characters import potion_action_label
 from bot.game.logic import (
     count_potions,
@@ -40,6 +41,7 @@ from bot.api_client import get_story_photo as api_get_story_photo
 router = Router()
 logger = logging.getLogger(__name__)
 API_CONNECTION_ERROR_TEXT = "Проблема соединения с сервером. Попробуйте ещё раз."
+SEND_IMAGES = is_image_sending_enabled()
 
 def _pop_tutorial_alert(state: dict) -> str | None:
     return state.pop("tutorial_alert", None)
@@ -94,7 +96,7 @@ async def _send_story_chapter(bot, chat_id: int, chapter: int, max_chapter: int)
     response = await api_get_story_chapter(chapter)
     caption = response.get("caption", "")
     markup = story_nav_kb(chapter, max_chapter)
-    if response.get("has_photo"):
+    if SEND_IMAGES and response.get("has_photo"):
         try:
             photo_bytes = await api_get_story_photo(chapter)
             photo = BufferedInputFile(photo_bytes, filename=f"h{chapter}.jpg")

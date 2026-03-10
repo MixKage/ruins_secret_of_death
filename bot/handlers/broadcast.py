@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, BufferedInputFile, Message
 
-from bot.config import get_admin_ids
+from bot.config import get_admin_ids, is_image_sending_enabled
 from bot.handlers.helpers import is_admin_user
 from bot.keyboards import broadcast_menu_kb, main_menu_kb
 from bot.api_client import (
@@ -23,6 +23,7 @@ from bot.api_client import (
 
 logger = logging.getLogger(__name__)
 router = Router()
+SEND_IMAGES = is_image_sending_enabled()
 
 BALANCE_BROADCAST_KEY = "balance_update_v1"
 BROADCAST_KEY = BALANCE_BROADCAST_KEY
@@ -67,7 +68,7 @@ SERVER_CRASH_PHOTO_KEY = "server_crash"
 
 async def _send_balance_update(message: Message, telegram_id: int, photo_bytes: bytes | None) -> None:
     markup = broadcast_menu_kb()
-    if photo_bytes:
+    if SEND_IMAGES and photo_bytes:
         photo = BufferedInputFile(photo_bytes, filename="balance_update.jpg")
         await message.bot.send_photo(
             telegram_id,
@@ -80,7 +81,7 @@ async def _send_balance_update(message: Message, telegram_id: int, photo_bytes: 
 
 async def _send_season_update(message: Message, telegram_id: int, photo_bytes: bytes | None) -> None:
     markup = broadcast_menu_kb()
-    if photo_bytes:
+    if SEND_IMAGES and photo_bytes:
         photo = BufferedInputFile(photo_bytes, filename="season2.jpg")
         await message.bot.send_photo(
             telegram_id,
@@ -131,10 +132,12 @@ async def _run_news_broadcast(message: Message) -> None:
         return
 
     photo_key = response.get("photo_key") or SEASON_PHOTO_KEY
-    try:
-        season_photo_bytes = await api_get_broadcast_photo(photo_key)
-    except Exception:
-        season_photo_bytes = None
+    season_photo_bytes = None
+    if SEND_IMAGES:
+        try:
+            season_photo_bytes = await api_get_broadcast_photo(photo_key)
+        except Exception:
+            season_photo_bytes = None
     sent = 0
     failed = 0
 
@@ -190,10 +193,12 @@ async def balance_update(message: Message) -> None:
         await message.answer("Нет пользователей для рассылки.")
         return
 
-    try:
-        balance_photo_bytes = await api_get_broadcast_photo(BALANCE_PHOTO_KEY)
-    except Exception:
-        balance_photo_bytes = None
+    balance_photo_bytes = None
+    if SEND_IMAGES:
+        try:
+            balance_photo_bytes = await api_get_broadcast_photo(BALANCE_PHOTO_KEY)
+        except Exception:
+            balance_photo_bytes = None
     sent = 0
     failed = 0
 
@@ -238,10 +243,12 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
     targets = response.get("targets", [])
     if not targets:
         return 0, 0, 0
-    try:
-        crash_photo_bytes = await api_get_broadcast_photo(SERVER_CRASH_PHOTO_KEY)
-    except Exception:
-        crash_photo_bytes = None
+    crash_photo_bytes = None
+    if SEND_IMAGES:
+        try:
+            crash_photo_bytes = await api_get_broadcast_photo(SERVER_CRASH_PHOTO_KEY)
+        except Exception:
+            crash_photo_bytes = None
     sent = 0
     failed = 0
 
@@ -250,7 +257,7 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
         if not telegram_id:
             continue
         try:
-            if crash_photo_bytes:
+            if SEND_IMAGES and crash_photo_bytes:
                 photo = BufferedInputFile(crash_photo_bytes, filename="server_crashed.jpg")
                 await bot.send_photo(telegram_id, photo, caption=SERVER_CRASH_TEXT)
             else:
@@ -264,7 +271,7 @@ async def send_server_crash_broadcast(bot) -> tuple[int, int, int]:
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                if crash_photo_bytes:
+                if SEND_IMAGES and crash_photo_bytes:
                     photo = BufferedInputFile(crash_photo_bytes, filename="server_crashed.jpg")
                     await bot.send_photo(telegram_id, photo, caption=SERVER_CRASH_TEXT)
                 else:

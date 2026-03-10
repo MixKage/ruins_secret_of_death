@@ -9,16 +9,18 @@ from bot.api_client import (
     get_story_chapter as api_get_story_chapter,
     get_story_photo as api_get_story_photo,
 )
+from bot.config import is_image_sending_enabled
 from bot.keyboards import story_nav_kb
 
 router = Router()
+SEND_IMAGES = is_image_sending_enabled()
 
 
 async def _send_chapter(callback: CallbackQuery, chapter: int, max_chapter: int) -> None:
     response = await api_get_story_chapter(chapter)
     caption = response.get("caption", "")
     markup = story_nav_kb(chapter, max_chapter)
-    photo_exists = bool(response.get("has_photo"))
+    photo_exists = bool(response.get("has_photo")) and SEND_IMAGES
 
     if callback.message and callback.message.photo and photo_exists:
         try:

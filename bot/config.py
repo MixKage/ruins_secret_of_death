@@ -35,3 +35,8 @@ def is_test_mode() -> bool:
     raw = os.getenv("BOT_TEST_MODE", "") or os.getenv("TEST_MODE", "")
     raw = raw.strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def is_image_sending_enabled() -> bool:
+    raw = _strip_wrapping_quotes(os.getenv("BOT_SEND_IMAGES", "0"))
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
