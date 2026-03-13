@@ -8,5 +8,10 @@ services:
       BOT_TEST_MODE: ${BOT_TEST_MODE:-0}
       API_BASE_URL: ${API_BASE_URL:-http://host.docker.internal:8000}
       API_BOT_TOKEN: ${API_BOT_TOKEN}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - api-network
+
+networks:
+  api-network:
+    external: true
+    name: ruins-network
