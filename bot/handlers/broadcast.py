@@ -42,16 +42,18 @@ BALANCE_UPDATE_TEXT = (
     "<i>Собери волю в кулак и спускайся - руины ждут нового героя.</i>"
 )
 
-SEASON_UPDATE_TEXT = (
-    "<b>Сезон 3 в Руинах уже близко.</b>\n"
-    "Мы не просто обновили цифры, мы пересобрали игру изнутри:\n"
-    "- <b>Ребаланс прогрессии</b> — ранние и средние этажи стали ровнее по темпу, меньше “автопилота”, больше решений в бою.\n"
-    "- <b>Новый босс: Хранитель Барьера</b> — встретит тех, кто заходит слишком глубоко и проверит, достоин ли ты идти дальше.\n"
-    "- <b>Система отзывов</b> — теперь можно оставлять фидбек прямо в игре, чтобы мы быстрее правили баланс и UX по живым данным.\n"
-    "- <b>Полностью переписанная архитектура</b> — проект переведён на новую backend-основу, API вынесено отдельно для стабильности и масштабирования.\n"
-    "- <b>Что дальше</b> — скоро новые клиенты: <b>VK</b> и <b>Web</b>.\n\n"    
-    "Сезон 3 — это новый фундамент Руин.\n"
-    "<i>Поднимешься в таблице лидеров или пополнишь ряды павших?</i>"
+SEASON_TOURNAMENT_TEXT = (
+    "<b>ТУРНИР СЕЗОНА: ХРАНИТЕЛЬ БАРЬЕРА</b>\n\n"
+    "Граница между Руинами и миром живых истончается. В этом месяце "
+    "Хранитель Барьера призывает сильнейших спуститься в глубины и оставить "
+    "своё имя в рейтинге.\n\n"
+    "<b>Докажи, что ты достоин стать лучшим.</b>\n"
+    "Поднимайся в рейтинге, побеждай врагов и не отступай перед Барьером. "
+    "В конце месяца три лучших героя получат награды:\n\n"
+    "🥇 <b>1 место</b> — 3 пиццы\n"
+    "🥈 <b>2 место</b> — 2 пиццы\n"
+    "🥉 <b>3 место</b> — 1 пицца\n\n"
+    "<i>Удачи в подземельях. Пройти через Барьер сможет только сильнейший.</i>"
 )
 
 SERVER_CRASH_TEXT = (
@@ -62,7 +64,7 @@ SERVER_CRASH_TEXT = (
 )
 
 BALANCE_PHOTO_KEY = "balance_update"
-SEASON_PHOTO_KEY = "season3"
+SEASON_TOURNAMENT_PHOTO_KEY = "guardian_barrier_tournament"
 SERVER_CRASH_PHOTO_KEY = "server_crash"
 
 
@@ -79,18 +81,35 @@ async def _send_balance_update(message: Message, telegram_id: int, photo_bytes: 
     else:
         await message.bot.send_message(telegram_id, BALANCE_UPDATE_TEXT, reply_markup=markup)
 
-async def _send_season_update(message: Message, telegram_id: int, photo_bytes: bytes | None) -> None:
+async def _send_season_tournament(
+    message: Message,
+    telegram_id: int,
+    photo_bytes: bytes | None,
+) -> None:
     markup = broadcast_menu_kb()
     if SEND_IMAGES and photo_bytes:
-        photo = BufferedInputFile(photo_bytes, filename="season2.jpg")
-        await message.bot.send_photo(
-            telegram_id,
-            photo,
-            caption=SEASON_UPDATE_TEXT,
-            reply_markup=markup,
-        )
-    else:
-        await message.bot.send_message(telegram_id, SEASON_UPDATE_TEXT, reply_markup=markup)
+        try:
+            photo = BufferedInputFile(photo_bytes, filename="guardian_barrier_tournament.png")
+            await message.bot.send_photo(
+                telegram_id,
+                photo,
+                caption=SEASON_TOURNAMENT_TEXT,
+                reply_markup=markup,
+            )
+            return
+        except (TelegramRetryAfter, TelegramForbiddenError):
+            raise
+        except Exception:
+            logger.warning(
+                "Tournament photo delivery failed; retrying as text: telegram_id=%s",
+                telegram_id,
+                exc_info=True,
+            )
+    await message.bot.send_message(
+        telegram_id,
+        SEASON_TOURNAMENT_TEXT,
+        reply_markup=markup,
+    )
 
 
 async def _run_news_broadcast(message: Message) -> None:
@@ -131,13 +150,17 @@ async def _run_news_broadcast(message: Message) -> None:
         await message.answer("Нет пользователей для рассылки.")
         return
 
-    photo_key = response.get("photo_key") or SEASON_PHOTO_KEY
-    season_photo_bytes = None
+    photo_key = response.get("photo_key") or SEASON_TOURNAMENT_PHOTO_KEY
+    tournament_photo_bytes = None
     if SEND_IMAGES:
         try:
-            season_photo_bytes = await api_get_broadcast_photo(photo_key)
+            tournament_photo_bytes = await api_get_broadcast_photo(photo_key)
         except Exception:
-            season_photo_bytes = None
+            logger.warning(
+                "Tournament photo loading failed; broadcasting text only: photo_key=%s",
+                photo_key,
+                exc_info=True,
+            )
     sent = 0
     failed = 0
 
@@ -149,7 +172,7 @@ async def _run_news_broadcast(message: Message) -> None:
         if not user_id or not telegram_id:
             continue
         try:
-            await _send_season_update(message, telegram_id, season_photo_bytes)
+            await _send_season_tournament(message, telegram_id, tournament_photo_bytes)
             await api_admin_news_mark_sent(user.id, user_id)
             sent += 1
         except TelegramRetryAfter as exc:
@@ -160,10 +183,17 @@ async def _run_news_broadcast(message: Message) -> None:
             )
             await asyncio.sleep(exc.retry_after)
             try:
-                await _send_season_update(message, telegram_id, season_photo_bytes)
+                await _send_season_tournament(message, telegram_id, tournament_photo_bytes)
                 await api_admin_news_mark_sent(user.id, user_id)
                 sent += 1
             except (TelegramForbiddenError, TelegramBadRequest):
+                failed += 1
+            except Exception:
+                logger.exception(
+                    "news broadcast retry failed: user_id=%s telegram_id=%s",
+                    user_id,
+                    telegram_id,
+                )
                 failed += 1
         except (TelegramForbiddenError, TelegramBadRequest):
             failed += 1

@@ -152,6 +152,7 @@ BOT_TOKEN="<token>"
 ADMIN_IDS="123,456"
 API_BOT_TOKEN="<secret>"
 BOT_TEST_MODE="0"
+BOT_SEND_IMAGES="1"
 ```
 
 2) Убедитесь, что API поднято отдельно (см. `ruins_secret_of_death_api/README.md`).
